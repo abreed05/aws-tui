@@ -16,5 +16,4 @@
 
 # Go workspace file
 go.work
-
-aws-tui
+/aws-tui

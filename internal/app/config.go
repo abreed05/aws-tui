@@ -109,3 +109,8 @@ func (c *Config) HistoryPath() string {
 func (c *Config) BookmarksPath() string {
 	return filepath.Join(c.ConfigDir, "bookmarks.yaml")
 }
+
+// ThemesPath returns the path to the themes directory
+func (c *Config) ThemesPath() string {
+	return filepath.Join(c.ConfigDir, "themes")
+}

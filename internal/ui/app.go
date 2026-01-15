@@ -89,7 +89,12 @@ type App struct {
 
 // NewApp creates a new application instance
 func NewApp(cfg *app.Config) (*App, error) {
-	theme := styles.DefaultTheme()
+	// Load theme from config, fallback to default if not found
+	theme, err := styles.LoadTheme(cfg.Theme, cfg.ConfigDir)
+	if err != nil {
+		// Theme not found, use default (error is non-fatal)
+		theme = styles.DefaultTheme()
+	}
 	keyMap := keys.DefaultKeyMap()
 
 	// Initialize command input

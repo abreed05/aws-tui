@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -293,6 +294,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, nil
 
+	case ssoLoginFinishedMsg:
+		if msg.err != nil {
+			a.footer.SetMessage(fmt.Sprintf("SSO login failed: %v", msg.err), true)
+			return a, nil
+		}
+		a.footer.SetMessage("SSO session refreshed successfully", false)
+		// Re-initialize the client to pick up new credentials
+		return a, a.switchProfile(a.clientMgr.Profile())
+
 	case components.ProfileSelectedMsg:
 		return a, a.switchProfile(msg.Profile)
 
@@ -571,6 +581,9 @@ func (a *App) executeCommand(input string) (tea.Model, tea.Cmd) {
 		}
 		return a.exportCurrentResource(args[0])
 
+	case "sso", "sso-login":
+		return a, a.refreshSSOSession()
+
 	default:
 		a.footer.SetMessage(fmt.Sprintf("Unknown command: %s", command), true)
 		return a, nil
@@ -627,6 +640,19 @@ func (a *App) switchRegion(region string) tea.Cmd {
 			accountID: "",
 		}
 	}
+}
+
+// ssoLoginFinishedMsg is sent when the SSO login process completes
+type ssoLoginFinishedMsg struct {
+	err error
+}
+
+func (a *App) refreshSSOSession() tea.Cmd {
+	profile := a.clientMgr.Profile()
+	c := exec.Command("aws", "sso", "login", "--profile", profile)
+	return tea.ExecProcess(c, func(err error) tea.Msg {
+		return ssoLoginFinishedMsg{err: err}
+	})
 }
 
 // exportCurrentResource exports the selected resource or list to a file
@@ -862,8 +888,8 @@ func (a *App) overlayCommand(content string, height int) string {
 
 	lines := strings.Split(content, "\n")
 	if len(lines) > 1 {
-		lines = lines[:len(lines)-1]
+		lines = lines[1:] // Remove first line to make room for command at top
 	}
 
-	return strings.Join(lines, "\n") + "\n" + commandBox
+	return commandBox + "\n" + strings.Join(lines, "\n")
 }

@@ -404,6 +404,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.state = StateResourceList
 		a.breadcrumb.SetPath("ECS", "Clusters", msg.ClusterName, "Services")
 		a.resourceList.SetHandler(handler)
+		a.footer.SetHandlerActions(handler.Actions())
 		a.loading = true
 		a.footer.SetLoading(true, "Loading services...")
 		contentHeight := a.calculateContentHeight()
@@ -433,6 +434,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		a.state = StateResourceList
 		a.resourceList.SetHandler(handler)
+		a.footer.SetHandlerActions(handler.Actions())
 		a.loading = true
 		a.footer.SetLoading(true, "Loading tasks...")
 		contentHeight := a.calculateContentHeight()
@@ -494,6 +496,7 @@ func (a *App) handleNormalMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.state = StateHome
 			a.breadcrumb.SetPath("Home")
 			a.footer.ClearPagination()
+			a.footer.ClearHandlerActions()
 			return a, nil
 		case "q":
 			return a, tea.Quit
@@ -702,6 +705,7 @@ func (a *App) navigateToResource(shortcut string, breadcrumbParts ...string) (te
 	a.state = StateResourceList
 	a.breadcrumb.SetPath(breadcrumbParts...)
 	a.resourceList.SetHandler(handler)
+	a.footer.SetHandlerActions(handler.Actions())
 	a.loading = true
 	a.footer.SetLoading(true, fmt.Sprintf("Loading %s...", handler.ResourceName()))
 
@@ -879,6 +883,7 @@ func (a *App) navigateToBookmark(bookmark config.Bookmark) (tea.Model, tea.Cmd) 
 	a.state = StateResourceList
 	a.breadcrumb.SetPath(handler.ResourceName())
 	a.resourceList.SetHandler(handler)
+	a.footer.SetHandlerActions(handler.Actions())
 	a.loading = true
 	a.footer.SetLoading(true, fmt.Sprintf("Loading %s...", handler.ResourceName()))
 

@@ -191,7 +191,7 @@ func (h *ECSTasksHandler) Describe(ctx context.Context, id string) (map[string]i
 
 func (h *ECSTasksHandler) Actions() []Action {
 	return []Action{
-		{Key: "x", Name: "exec", Description: "Execute into container"},
+		{Key: "x", Name: "exec", Description: "exec shell"},
 	}
 }
 

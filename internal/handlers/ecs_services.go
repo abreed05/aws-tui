@@ -143,7 +143,7 @@ func (h *ECSServicesHandler) Describe(ctx context.Context, id string) (map[strin
 
 func (h *ECSServicesHandler) Actions() []Action {
 	return []Action{
-		{Key: "t", Name: "tasks", Description: "View tasks"},
+		{Key: "t", Name: "tasks", Description: "tasks"},
 	}
 }
 

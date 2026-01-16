@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/aaw-tui/aws-tui/internal/handlers"
 	"github.com/aaw-tui/aws-tui/internal/ui/keys"
 	"github.com/aaw-tui/aws-tui/internal/ui/styles"
 )
@@ -23,6 +24,8 @@ type Footer struct {
 	page    int
 	hasMore bool
 	count   int
+	// Handler actions for context-specific hints
+	handlerActions []handlers.Action
 }
 
 // NewFooter creates a new footer component
@@ -70,6 +73,16 @@ func (f *Footer) ClearPagination() {
 	f.count = 0
 }
 
+// SetHandlerActions sets the handler actions for context-specific hints
+func (f *Footer) SetHandlerActions(actions []handlers.Action) {
+	f.handlerActions = actions
+}
+
+// ClearHandlerActions clears the handler actions
+func (f *Footer) ClearHandlerActions() {
+	f.handlerActions = nil
+}
+
 // View renders the footer
 func (f *Footer) View() string {
 	// If loading, show loading indicator
@@ -113,14 +126,24 @@ func (f *Footer) buildHelpHints() string {
 
 	hints := []string{
 		fmt.Sprintf("%s %s", keyStyle.Render("j/k"), descStyle.Render("nav")),
-		fmt.Sprintf("%s %s", keyStyle.Render("enter"), descStyle.Render("select")),
+	}
+
+	// Add handler-specific action hints if available
+	if len(f.handlerActions) > 0 {
+		for _, action := range f.handlerActions {
+			hints = append(hints, fmt.Sprintf("%s %s", keyStyle.Render(action.Key), descStyle.Render(action.Description)))
+		}
+	}
+
+	// Add common hints
+	hints = append(hints,
 		fmt.Sprintf("%s %s", keyStyle.Render("/"), descStyle.Render("search")),
 		fmt.Sprintf("%s %s", keyStyle.Render(":"), descStyle.Render("cmd")),
 		fmt.Sprintf("%s %s", keyStyle.Render("d"), descStyle.Render("describe")),
 		fmt.Sprintf("%s %s", keyStyle.Render("c"), descStyle.Render("copy")),
 		fmt.Sprintf("%s %s", keyStyle.Render("?"), descStyle.Render("help")),
 		fmt.Sprintf("%s %s", keyStyle.Render("q"), descStyle.Render("quit")),
-	}
+	)
 
 	helpHints := strings.Join(hints, sepStyle.Render(" │ "))
 

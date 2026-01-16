@@ -171,8 +171,8 @@ func (h *ECSClustersHandler) Describe(ctx context.Context, id string) (map[strin
 
 func (h *ECSClustersHandler) Actions() []Action {
 	return []Action{
-		{Key: "s", Name: "services", Description: "View services"},
-		{Key: "t", Name: "tasks", Description: "View tasks"},
+		{Key: "s", Name: "services", Description: "services"},
+		{Key: "t", Name: "tasks", Description: "tasks"},
 	}
 }
 

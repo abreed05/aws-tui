@@ -11,6 +11,35 @@ import (
 	ecsadapter "github.com/aaw-tui/aws-tui/internal/adapters/aws/ecs"
 )
 
+// NavigateToServicesAction is returned by ExecuteAction to trigger navigation to services
+type NavigateToServicesAction struct {
+	ClusterARN  string
+	ClusterName string
+}
+
+func (a *NavigateToServicesAction) Error() string {
+	return fmt.Sprintf("navigate to services for cluster %s", a.ClusterName)
+}
+
+func (a *NavigateToServicesAction) IsActionMsg() {}
+
+// NavigateToTasksAction is returned by ExecuteAction to trigger navigation to tasks
+type NavigateToTasksAction struct {
+	ClusterARN  string
+	ClusterName string
+	ServiceARN  string // Optional - if set, filter by service
+	ServiceName string // Optional - if set, filter by service
+}
+
+func (a *NavigateToTasksAction) Error() string {
+	if a.ServiceName != "" {
+		return fmt.Sprintf("navigate to tasks for service %s", a.ServiceName)
+	}
+	return fmt.Sprintf("navigate to tasks for cluster %s", a.ClusterName)
+}
+
+func (a *NavigateToTasksAction) IsActionMsg() {}
+
 // ECSClustersHandler handles ECS Cluster resources
 type ECSClustersHandler struct {
 	BaseHandler
@@ -144,6 +173,28 @@ func (h *ECSClustersHandler) Actions() []Action {
 	return []Action{
 		{Key: "s", Name: "services", Description: "View services"},
 		{Key: "t", Name: "tasks", Description: "View tasks"},
+	}
+}
+
+func (h *ECSClustersHandler) ExecuteAction(ctx context.Context, action string, resourceID string) error {
+	cluster, err := h.Get(ctx, resourceID)
+	if err != nil {
+		return err
+	}
+
+	switch action {
+	case "services":
+		return &NavigateToServicesAction{
+			ClusterARN:  cluster.GetARN(),
+			ClusterName: cluster.GetName(),
+		}
+	case "tasks":
+		return &NavigateToTasksAction{
+			ClusterARN:  cluster.GetARN(),
+			ClusterName: cluster.GetName(),
+		}
+	default:
+		return ErrNotSupported
 	}
 }
 

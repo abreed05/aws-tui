@@ -25,6 +25,18 @@ type ResourceDetailLoadedMsg struct {
 	Error   error
 }
 
+// ActionMsg is a message returned by ExecuteAction to trigger navigation
+type ActionMsg interface {
+	error
+	IsActionMsg()
+}
+
+// ActionErrorMsg indicates an action failed
+type ActionErrorMsg struct {
+	Error  error
+	Action string
+}
+
 // ResourceListView displays a list of resources with optional detail pane
 type ResourceListView struct {
 	handler handlers.ResourceHandler
@@ -349,10 +361,48 @@ func (v *ResourceListView) Update(msg tea.Msg) (*ResourceListView, tea.Cmd) {
 			return v, v.Refresh()
 		}
 
-		// Handle tag filter activation
+		// Handle actions (s, t, x, etc.) - check handler actions first
+		if !v.search.IsActive() && !v.tagFilter.IsActive() && v.handler != nil {
+			actions := v.handler.Actions()
+			for _, action := range actions {
+				if msg.String() == action.Key {
+					// Get selected resource
+					if res := v.table.SelectedResource(); res != nil {
+						// Execute action on handler
+						ctx := context.Background()
+						err := v.handler.ExecuteAction(ctx, action.Name, res.GetID())
+						if err != nil {
+							// Check if it's a special navigation action
+							if navAction, ok := err.(ActionMsg); ok {
+								return v, func() tea.Msg { return navAction }
+							}
+							// Regular error
+							return v, func() tea.Msg {
+								return ActionErrorMsg{Error: err, Action: action.Name}
+							}
+						}
+					}
+					return v, nil
+				}
+			}
+		}
+
+		// Handle tag filter activation (only if no action conflicts)
 		if msg.String() == "t" && !v.search.IsActive() && !v.tagFilter.IsActive() {
-			v.table.Blur()
-			return v, v.tagFilter.Activate()
+			// Check if 't' is used by an action first
+			hasTagsAction := false
+			if v.handler != nil {
+				for _, action := range v.handler.Actions() {
+					if action.Key == "t" {
+						hasTagsAction = true
+						break
+					}
+				}
+			}
+			if !hasTagsAction {
+				v.table.Blur()
+				return v, v.tagFilter.Activate()
+			}
 		}
 
 		// Handle pagination - next page

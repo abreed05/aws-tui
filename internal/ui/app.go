@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -68,6 +69,7 @@ type App struct {
 	breadcrumb   *components.Breadcrumb
 	selector     *components.Selector
 	resourceList *views.ResourceListView
+	autocomplete *components.Autocomplete
 
 	// Input components for modes
 	commandInput textinput.Model
@@ -123,6 +125,7 @@ func NewApp(cfg *app.Config) (*App, error) {
 		breadcrumb:       components.NewBreadcrumb(theme),
 		selector:         components.NewSelector(theme),
 		resourceList:     views.NewResourceListView(theme),
+		autocomplete:     components.NewAutocomplete(),
 		commandInput:     commandInput,
 	}
 
@@ -389,6 +392,72 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case components.BookmarkSelectedMsg:
 		// Navigate to the bookmarked resource
 		return a.navigateToBookmark(msg.Bookmark)
+
+	// ECS Navigation actions
+	case *handlers.NavigateToServicesAction:
+		handler := handlers.NewECSServicesHandlerForCluster(
+			a.clientMgr.ECS(),
+			a.clientMgr.Region(),
+			msg.ClusterARN,
+			msg.ClusterName,
+		)
+		a.state = StateResourceList
+		a.breadcrumb.SetPath("ECS", "Clusters", msg.ClusterName, "Services")
+		a.resourceList.SetHandler(handler)
+		a.loading = true
+		a.footer.SetLoading(true, "Loading services...")
+		contentHeight := a.calculateContentHeight()
+		a.resourceList.SetSize(a.width, contentHeight)
+		return a, a.resourceList.LoadResources(context.Background(), "")
+
+	case *handlers.NavigateToTasksAction:
+		var handler *handlers.ECSTasksHandler
+		if msg.ServiceARN != "" {
+			handler = handlers.NewECSTasksHandlerForService(
+				a.clientMgr.ECS(),
+				a.clientMgr.Region(),
+				msg.ClusterARN,
+				msg.ClusterName,
+				msg.ServiceARN,
+				msg.ServiceName,
+			)
+			a.breadcrumb.SetPath("ECS", "Clusters", msg.ClusterName, "Services", msg.ServiceName, "Tasks")
+		} else {
+			handler = handlers.NewECSTasksHandlerForCluster(
+				a.clientMgr.ECS(),
+				a.clientMgr.Region(),
+				msg.ClusterARN,
+				msg.ClusterName,
+			)
+			a.breadcrumb.SetPath("ECS", "Clusters", msg.ClusterName, "Tasks")
+		}
+		a.state = StateResourceList
+		a.resourceList.SetHandler(handler)
+		a.loading = true
+		a.footer.SetLoading(true, "Loading tasks...")
+		contentHeight := a.calculateContentHeight()
+		a.resourceList.SetSize(a.width, contentHeight)
+		return a, a.resourceList.LoadResources(context.Background(), "")
+
+	case *handlers.ExecRequestAction:
+		// For now, auto-select first container (can add picker later)
+		containerName := msg.Containers[0].Name
+		if len(msg.Containers) > 1 {
+			a.footer.SetMessage(fmt.Sprintf("Multiple containers found, using: %s", containerName), false)
+		}
+		return a, a.executeECSExec(msg.ClusterARN, msg.TaskARN, containerName)
+
+	case ecsExecFinishedMsg:
+		if msg.err != nil {
+			a.footer.SetMessage(fmt.Sprintf("Exec failed: %v", msg.err), true)
+		} else {
+			a.footer.SetMessage("Exec session completed", false)
+		}
+		return a, nil
+
+	case views.ActionErrorMsg:
+		a.footer.SetMessage(fmt.Sprintf("Action failed: %v", msg.Error), true)
+		return a, nil
 	}
 
 	// Route to resource list if in that state
@@ -496,6 +565,7 @@ func (a *App) handleCommandInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.mode = ModeNormal
 		a.commandInput.Blur()
 		a.commandInput.SetValue("")
+		a.autocomplete.Update("")
 		return a, nil
 
 	case "enter":
@@ -503,11 +573,38 @@ func (a *App) handleCommandInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.mode = ModeNormal
 		a.commandInput.Blur()
 		a.commandInput.SetValue("")
+		a.autocomplete.Update("")
 		return a.executeCommand(cmd)
+
+	case "tab":
+		// Cycle through autocomplete suggestions
+		if a.autocomplete.HasSuggestions() {
+			a.autocomplete.Next()
+			selected := a.autocomplete.Selected()
+			if selected != "" {
+				a.commandInput.SetValue(selected)
+			}
+		}
+		return a, nil
+
+	case "shift+tab":
+		// Cycle backwards through autocomplete suggestions
+		if a.autocomplete.HasSuggestions() {
+			a.autocomplete.Previous()
+			selected := a.autocomplete.Selected()
+			if selected != "" {
+				a.commandInput.SetValue(selected)
+			}
+		}
+		return a, nil
 	}
 
 	var cmd tea.Cmd
 	a.commandInput, cmd = a.commandInput.Update(msg)
+
+	// Update autocomplete suggestions based on current input
+	a.autocomplete.Update(a.commandInput.Value())
+
 	return a, cmd
 }
 
@@ -657,6 +754,32 @@ func (a *App) refreshSSOSession() tea.Cmd {
 	c := exec.Command("aws", "sso", "login", "--profile", profile)
 	return tea.ExecProcess(c, func(err error) tea.Msg {
 		return ssoLoginFinishedMsg{err: err}
+	})
+}
+
+// ecsExecFinishedMsg is sent when the ECS exec process completes
+type ecsExecFinishedMsg struct {
+	err error
+}
+
+func (a *App) executeECSExec(clusterARN, taskARN, containerName string) tea.Cmd {
+	cmd := exec.Command(
+		"aws", "ecs", "execute-command",
+		"--cluster", clusterARN,
+		"--task", taskARN,
+		"--container", containerName,
+		"--command", "/bin/bash",
+		"--interactive",
+	)
+
+	// Set AWS environment variables
+	cmd.Env = append(os.Environ(),
+		fmt.Sprintf("AWS_REGION=%s", a.clientMgr.Region()),
+		fmt.Sprintf("AWS_PROFILE=%s", a.clientMgr.Profile()),
+	)
+
+	return tea.ExecProcess(cmd, func(err error) tea.Msg {
+		return ecsExecFinishedMsg{err: err}
 	})
 }
 
@@ -891,10 +1014,29 @@ Navigation:
 func (a *App) overlayCommand(content string, height int) string {
 	commandBox := a.theme.Command.Width(a.width).Render(a.commandInput.View())
 
-	lines := strings.Split(content, "\n")
-	if len(lines) > 1 {
-		lines = lines[1:] // Remove first line to make room for command at top
+	// Get autocomplete suggestions if available
+	var autocompleteBox string
+	if a.autocomplete.HasSuggestions() {
+		autocompleteBox = a.autocomplete.View(a.width)
 	}
 
-	return commandBox + "\n" + strings.Join(lines, "\n")
+	lines := strings.Split(content, "\n")
+	linesToRemove := 1
+	if autocompleteBox != "" {
+		// Count lines in autocomplete box and remove that many additional lines
+		autocompleteLines := strings.Count(autocompleteBox, "\n") + 1
+		linesToRemove += autocompleteLines
+	}
+
+	if len(lines) > linesToRemove {
+		lines = lines[linesToRemove:] // Remove lines to make room for command and autocomplete
+	}
+
+	result := commandBox
+	if autocompleteBox != "" {
+		result += "\n" + autocompleteBox
+	}
+	result += "\n" + strings.Join(lines, "\n")
+
+	return result
 }

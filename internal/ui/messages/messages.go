@@ -102,3 +102,46 @@ type WindowSizeMsg struct {
 	Width  int
 	Height int
 }
+
+// ECS Navigation messages
+
+// NavigateToECSServicesMsg requests navigation to ECS services for a cluster
+type NavigateToECSServicesMsg struct {
+	ClusterARN  string
+	ClusterName string
+	Breadcrumb  []string
+}
+
+// NavigateToECSTasksMsg requests navigation to ECS tasks for a service
+type NavigateToECSTasksMsg struct {
+	ClusterARN  string
+	ClusterName string
+	ServiceARN  string
+	ServiceName string
+	Breadcrumb  []string
+}
+
+// ECSExecRequestMsg requests execution into a container
+type ECSExecRequestMsg struct {
+	ClusterARN string
+	TaskARN    string
+	Containers []ECSContainer
+}
+
+// ECSContainer represents a container in a task
+type ECSContainer struct {
+	Name         string
+	RuntimeId    string
+	Status       string
+	HealthStatus string
+}
+
+// ContainerSelectedMsg is sent when a container is selected from the picker
+type ContainerSelectedMsg struct {
+	ContainerName string
+}
+
+// ECSExecFinishedMsg is sent when the exec command completes
+type ECSExecFinishedMsg struct {
+	Error error
+}

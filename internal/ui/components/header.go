@@ -69,12 +69,12 @@ func (h *Header) View() string {
 
 	left := fmt.Sprintf("%s  %s  %s",
 		title,
-		profileStyle.Render("⚙ "+h.profile),
-		regionStyle.Render("⚑ "+h.region),
+		profileStyle.Render("Profile: "+h.profile),
+		regionStyle.Render("Region: "+h.region),
 	)
 
 	if h.accountID != "" {
-		left += "  " + accountStyle.Render("☁ "+h.accountID)
+		left += "  " + accountStyle.Render("Account ID: "+h.accountID)
 	}
 
 	// Right side: Status indicators

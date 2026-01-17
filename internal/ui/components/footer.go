@@ -126,6 +126,7 @@ func (f *Footer) buildHelpHints() string {
 
 	hints := []string{
 		fmt.Sprintf("%s %s", keyStyle.Render("j/k"), descStyle.Render("nav")),
+		fmt.Sprintf("%s %s", keyStyle.Render("Ctrl+R"), descStyle.Render("refresh")),
 	}
 
 	// Add handler-specific action hints if available

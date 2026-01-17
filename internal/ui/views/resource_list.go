@@ -295,12 +295,26 @@ func (v *ResourceListView) Update(msg tea.Msg) (*ResourceListView, tea.Cmd) {
 			return v, v.search.Activate()
 		}
 
-		// Handle copy ARN/ID
+		// Handle copy ARN/ID (only if handler doesn't use 'c' for an action)
 		if msg.String() == "c" && !v.search.IsActive() {
-			if res := v.table.SelectedResource(); res != nil {
-				return v, components.CopyToClipboard(res.GetARN(), "ARN")
+			// Check if handler has a 'c' action
+			hasCreateAction := false
+			if v.handler != nil {
+				for _, action := range v.handler.Actions() {
+					if action.Key == "c" {
+						hasCreateAction = true
+						break
+					}
+				}
 			}
-			return v, nil
+
+			// Only copy ARN if handler doesn't use 'c'
+			if !hasCreateAction {
+				if res := v.table.SelectedResource(); res != nil {
+					return v, components.CopyToClipboard(res.GetARN(), "ARN")
+				}
+				return v, nil
+			}
 		}
 
 		// Handle copy full resource as JSON
@@ -356,9 +370,28 @@ func (v *ResourceListView) Update(msg tea.Msg) (*ResourceListView, tea.Cmd) {
 			return v, nil
 		}
 
-		// Handle refresh
-		if msg.String() == "r" && !v.search.IsActive() && !v.tagFilter.IsActive() {
+		// Handle refresh with Ctrl+R (universal refresh)
+		if msg.String() == "ctrl+r" && !v.search.IsActive() && !v.tagFilter.IsActive() {
 			return v, v.Refresh()
+		}
+
+		// Handle refresh with 'r' (only if handler doesn't use 'r' for an action)
+		if msg.String() == "r" && !v.search.IsActive() && !v.tagFilter.IsActive() {
+			// Check if handler has an 'r' action
+			hasRotationAction := false
+			if v.handler != nil {
+				for _, action := range v.handler.Actions() {
+					if action.Key == "r" {
+						hasRotationAction = true
+						break
+					}
+				}
+			}
+
+			// Only refresh if handler doesn't use 'r'
+			if !hasRotationAction {
+				return v, v.Refresh()
+			}
 		}
 
 		// Handle actions (s, t, x, etc.) - check handler actions first

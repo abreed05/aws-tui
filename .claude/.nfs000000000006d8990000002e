@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "Bash(go mod init:*)",
+      "Bash(go mod tidy:*)",
+      "Bash(go build:*)",
+      "Bash(grep:*)",
+      "Bash(ls:*)",
+      "Bash(xargs -I {} sh -c 'grep -l \"\"ExecuteAction\"\" {} && echo {}')"
+    ]
+  }
+}

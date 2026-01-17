@@ -7,6 +7,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
+	"github.com/aws/aws-sdk-go-v2/service/secretsmanager/types"
 )
 
 // SecretsClient wraps the Secrets Manager client
@@ -173,4 +174,95 @@ func (c *SecretsClient) GetSecretVersionIDs(ctx context.Context, secretID string
 	}
 
 	return versionIDs, nil
+}
+
+// GetSecretValue retrieves the actual secret value
+func (c *SecretsClient) GetSecretValue(ctx context.Context, secretID string) (string, error) {
+	output, err := c.client.GetSecretValue(ctx, &secretsmanager.GetSecretValueInput{
+		SecretId: aws.String(secretID),
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to get secret value: %w", err)
+	}
+
+	// Return string value (most common)
+	if output.SecretString != nil {
+		return aws.ToString(output.SecretString), nil
+	}
+
+	// Handle binary secrets (less common)
+	if output.SecretBinary != nil {
+		return string(output.SecretBinary), nil
+	}
+
+	return "", fmt.Errorf("secret has no value")
+}
+
+// UpdateSecretValue updates a secret's value
+func (c *SecretsClient) UpdateSecretValue(ctx context.Context, secretID, secretValue string) error {
+	_, err := c.client.PutSecretValue(ctx, &secretsmanager.PutSecretValueInput{
+		SecretId:     aws.String(secretID),
+		SecretString: aws.String(secretValue),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to update secret: %w", err)
+	}
+
+	return nil
+}
+
+// CreateSecretParams contains parameters for creating a secret
+type CreateSecretParams struct {
+	Name        string
+	SecretValue string
+	Description string
+	Tags        map[string]string
+}
+
+// CreateSecret creates a new secret
+func (c *SecretsClient) CreateSecret(ctx context.Context, params CreateSecretParams) (*Secret, error) {
+	input := &secretsmanager.CreateSecretInput{
+		Name:         aws.String(params.Name),
+		SecretString: aws.String(params.SecretValue),
+	}
+
+	if params.Description != "" {
+		input.Description = aws.String(params.Description)
+	}
+
+	if len(params.Tags) > 0 {
+		tags := make([]types.Tag, 0, len(params.Tags))
+		for k, v := range params.Tags {
+			tags = append(tags, types.Tag{
+				Key:   aws.String(k),
+				Value: aws.String(v),
+			})
+		}
+		input.Tags = tags
+	}
+
+	output, err := c.client.CreateSecret(ctx, input)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create secret: %w", err)
+	}
+
+	// Fetch the created secret to return full details
+	return c.GetSecret(ctx, aws.ToString(output.Name))
+}
+
+// DeleteSecret schedules a secret for deletion with recovery window
+func (c *SecretsClient) DeleteSecret(ctx context.Context, secretID string, recoveryWindowDays int32) error {
+	if recoveryWindowDays < 7 || recoveryWindowDays > 30 {
+		return fmt.Errorf("recovery window must be between 7 and 30 days")
+	}
+
+	_, err := c.client.DeleteSecret(ctx, &secretsmanager.DeleteSecretInput{
+		SecretId:             aws.String(secretID),
+		RecoveryWindowInDays: aws.Int64(int64(recoveryWindowDays)),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to delete secret: %w", err)
+	}
+
+	return nil
 }

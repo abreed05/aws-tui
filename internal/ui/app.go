@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -30,6 +31,8 @@ const (
 	StateHome AppState = iota
 	StateResourceList
 	StateResourceDetail
+	StateSecretEditor
+	StateSecretCreator
 )
 
 // Mode represents vim-like modes
@@ -39,6 +42,7 @@ const (
 	ModeNormal Mode = iota
 	ModeSearch
 	ModeCommand
+	ModeConfirm
 )
 
 // App is the main Bubbletea model
@@ -73,6 +77,12 @@ type App struct {
 
 	// Input components for modes
 	commandInput textinput.Model
+
+	// Secret editing
+	secretEditor  *components.SecretEditor
+	secretCreator *components.SecretCreator
+	confirmDialog *components.ConfirmDialog
+	pendingAction interface{}
 
 	// Theme and keys
 	theme styles.Theme
@@ -127,6 +137,9 @@ func NewApp(cfg *app.Config) (*App, error) {
 		resourceList:     views.NewResourceListView(theme),
 		autocomplete:     components.NewAutocomplete(),
 		commandInput:     commandInput,
+		secretEditor:     components.NewSecretEditor(theme),
+		secretCreator:    components.NewSecretCreator(theme),
+		confirmDialog:    components.NewConfirmDialog(theme),
 	}
 
 	// Load regions (static)
@@ -219,6 +232,9 @@ func (a *App) registerHandlers() {
 	// Register Lambda handlers
 	a.registry.Register(handlers.NewLambdaFunctionsHandler(a.clientMgr.Lambda(), a.clientMgr.Region()))
 
+	// Register CloudWatch Logs handlers
+	a.registry.Register(handlers.NewCloudWatchLogsHandler(a.clientMgr.CloudWatchLogs(), a.clientMgr.Region()))
+
 	// Register S3 handlers
 	a.registry.Register(handlers.NewS3BucketsHandler(a.clientMgr.S3(), a.clientMgr.Region()))
 }
@@ -265,7 +281,16 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch a.mode {
 		case ModeCommand:
 			return a.handleCommandInput(msg)
+		case ModeConfirm:
+			return a.handleConfirmMode(msg)
 		default:
+			// Handle state-specific input in normal mode
+			if a.state == StateSecretEditor {
+				return a.handleSecretEditorMode(msg)
+			}
+			if a.state == StateSecretCreator {
+				return a.handleSecretCreatorMode(msg)
+			}
 			return a.handleNormalMode(msg)
 		}
 
@@ -441,6 +466,61 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.resourceList.SetSize(a.width, contentHeight)
 		return a, a.resourceList.LoadResources(context.Background(), "")
 
+	// CloudWatch Logs Navigation actions
+	case *handlers.NavigateToLogStreamsAction:
+		handler := handlers.NewCloudWatchLogStreamsHandlerForGroup(
+			a.clientMgr.CloudWatchLogs(),
+			a.clientMgr.Region(),
+			msg.LogGroupName,
+		)
+		a.state = StateResourceList
+		a.breadcrumb.SetPath("CloudWatch Logs", "Log Groups", msg.LogGroupName, "Log Streams")
+		a.resourceList.SetHandler(handler)
+		a.footer.SetHandlerActions(handler.Actions())
+		a.loading = true
+		a.footer.SetLoading(true, "Loading log streams...")
+		contentHeight := a.calculateContentHeight()
+		a.resourceList.SetSize(a.width, contentHeight)
+		return a, a.resourceList.LoadResources(context.Background(), "")
+
+	// Secrets Manager actions
+	case *handlers.ViewSecretAction:
+		// Show confirmation dialog
+		a.mode = ModeConfirm
+		a.pendingAction = msg
+		a.confirmDialog.SetMessage(fmt.Sprintf(
+			"You are about to view the secret value for:\n\n%s\n\nThis will display sensitive information.",
+			msg.SecretName,
+		))
+		a.confirmDialog.SetWidth(a.width)
+		return a, nil
+
+	case *handlers.EditSecretAction:
+		// Load secret value and enter editor
+		a.footer.SetLoading(true, "Loading secret...")
+		return a, a.loadSecretForEditing(msg.SecretID, msg.SecretName)
+
+	case *handlers.CreateSecretAction:
+		// Activate secret creator form
+		a.state = StateSecretCreator
+		contentHeight := a.calculateContentHeight()
+		a.secretCreator.SetSize(a.width, contentHeight)
+		return a, a.secretCreator.Activate()
+
+	case *handlers.DeleteSecretAction:
+		// Show enhanced confirmation dialog with recovery window input
+		a.mode = ModeConfirm
+		a.pendingAction = msg
+		a.confirmDialog.SetMessage(fmt.Sprintf(
+			"You are about to delete the secret:\n\n%s\n\n"+
+				"This will schedule the secret for deletion.\n"+
+				"It can be recovered within the recovery window.",
+			msg.SecretName,
+		))
+		a.confirmDialog.RequireInput("Recovery window (days, 7-30)", "30", 7, 30)
+		a.confirmDialog.SetWidth(a.width)
+		return a, nil
+
 	case *handlers.ExecRequestAction:
 		// For now, auto-select first container (can add picker later)
 		containerName := msg.Containers[0].Name
@@ -459,6 +539,66 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case views.ActionErrorMsg:
 		a.footer.SetMessage(fmt.Sprintf("Action failed: %v", msg.Error), true)
+		return a, nil
+
+	// Secret operation messages
+	case SecretLoadedMsg:
+		// Show secret value in detail view (could enhance this with a modal)
+		a.footer.SetMessage(fmt.Sprintf("Secret value: %s", msg.value), false)
+		a.footer.SetLoading(false, "")
+		return a, nil
+
+	case SecretLoadedForEditMsg:
+		// Enter editor mode
+		a.state = StateSecretEditor
+		a.secretEditor.SetSecret(msg.id, msg.name, msg.value)
+		contentHeight := a.calculateContentHeight()
+		a.secretEditor.SetSize(a.width, contentHeight)
+		a.footer.SetLoading(false, "")
+		return a, nil
+
+	case SecretSavedMsg:
+		// Return to list view
+		a.state = StateResourceList
+		a.footer.SetMessage("Secret updated successfully", false)
+		a.footer.SetLoading(false, "")
+		// Refresh the list
+		return a, a.resourceList.LoadResources(context.Background(), "")
+
+	case SecretSaveErrorMsg:
+		a.footer.SetMessage(fmt.Sprintf("Failed to save: %v", msg.err), true)
+		a.footer.SetLoading(false, "")
+		return a, nil
+
+	case SecretLoadErrorMsg:
+		a.footer.SetMessage(fmt.Sprintf("Failed to load: %v", msg.err), true)
+		a.footer.SetLoading(false, "")
+		a.mode = ModeNormal
+		a.pendingAction = nil
+		return a, nil
+
+	case SecretCreatedMsg:
+		a.state = StateResourceList
+		a.footer.SetMessage(fmt.Sprintf("Secret '%s' created successfully", msg.secretName), false)
+		a.footer.SetLoading(false, "")
+		a.secretCreator.Reset()
+		// Refresh the list
+		return a, a.resourceList.LoadResources(context.Background(), "")
+
+	case SecretCreateErrorMsg:
+		a.footer.SetMessage(fmt.Sprintf("Failed to create secret: %v", msg.err), true)
+		a.footer.SetLoading(false, "")
+		return a, nil
+
+	case SecretDeletedMsg:
+		a.footer.SetMessage(fmt.Sprintf("Secret '%s' scheduled for deletion", msg.secretID), false)
+		a.footer.SetLoading(false, "")
+		// Refresh the list
+		return a, a.resourceList.LoadResources(context.Background(), "")
+
+	case SecretDeleteErrorMsg:
+		a.footer.SetMessage(fmt.Sprintf("Failed to delete secret: %v", msg.err), true)
+		a.footer.SetLoading(false, "")
 		return a, nil
 	}
 
@@ -551,7 +691,7 @@ func (a *App) handleNormalMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case msg.String() == "?":
-		a.footer.SetMessage("q:quit  ::command  p:profiles  R:regions  ':bookmarks  :users :roles :policies", false)
+		a.footer.SetMessage("q:quit  ::command  p:profiles  R:regions  ':bookmarks  :users :roles :policies :logs", false)
 		return a, nil
 
 	case msg.String() == "'":
@@ -675,6 +815,9 @@ func (a *App) executeCommand(input string) (tea.Model, tea.Cmd) {
 
 	case "lambda":
 		return a.navigateToResource("lambda", "Lambda", "Functions")
+
+	case "logs":
+		return a.navigateToResource("logs", "CloudWatch Logs", "Log Groups")
 
 	case "s3":
 		return a.navigateToResource("s3", "S3", "Buckets")
@@ -918,6 +1061,10 @@ func (a *App) View() string {
 		content = a.renderHome(contentHeight)
 	case StateResourceList:
 		content = a.resourceList.View()
+	case StateSecretEditor:
+		content = a.secretEditor.View()
+	case StateSecretCreator:
+		content = a.secretCreator.View()
 	default:
 		content = a.renderHome(contentHeight)
 	}
@@ -925,6 +1072,11 @@ func (a *App) View() string {
 	// Add command mode overlay
 	if a.mode == ModeCommand {
 		content = a.overlayCommand(content, contentHeight)
+	}
+
+	// Add confirmation dialog overlay
+	if a.mode == ModeConfirm {
+		content = a.overlayConfirm(content)
 	}
 
 	// Compose the view
@@ -972,6 +1124,7 @@ func (a *App) renderHome(height int) string {
   :rds        - List RDS Instances
   :ecs        - List ECS Clusters
   :lambda     - List Lambda Functions
+  :logs       - List CloudWatch Log Groups
   :s3         - List S3 Buckets
   :kms        - List KMS Keys
   :secrets    - List Secrets
@@ -1044,4 +1197,291 @@ func (a *App) overlayCommand(content string, height int) string {
 	result += "\n" + strings.Join(lines, "\n")
 
 	return result
+}
+
+func (a *App) overlayConfirm(content string) string {
+	// Center the dialog
+	lines := strings.Split(content, "\n")
+	if len(lines) > 5 {
+		lines = lines[5:]
+	}
+
+	dialog := a.confirmDialog.View()
+	result := dialog + "\n" + strings.Join(lines, "\n")
+
+	return result
+}
+
+// Message types for secret operations
+type SecretLoadedMsg struct {
+	name  string
+	value string
+}
+
+type SecretLoadedForEditMsg struct {
+	id    string
+	name  string
+	value string
+}
+
+type SecretLoadErrorMsg struct {
+	err error
+}
+
+type SecretSavedMsg struct {
+	secretID string
+}
+
+type SecretSaveErrorMsg struct {
+	err error
+}
+
+// Secret creation messages
+type SecretCreatedMsg struct {
+	secretName string
+}
+
+type SecretCreateErrorMsg struct {
+	err error
+}
+
+// Secret deletion messages
+type SecretDeletedMsg struct {
+	secretID string
+}
+
+type SecretDeleteErrorMsg struct {
+	err error
+}
+
+// handleConfirmMode handles confirmation dialog input
+func (a *App) handleConfirmMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "y", "Y":
+		// User confirmed
+		a.mode = ModeNormal
+
+		if deleteAction, ok := a.pendingAction.(*handlers.DeleteSecretAction); ok {
+			// Get recovery window from dialog input
+			recoveryWindow := 30 // default
+			if input := a.confirmDialog.GetInput(); input != "" {
+				if val, err := strconv.Atoi(input); err == nil {
+					if val < 7 || val > 30 {
+						a.footer.SetMessage("Recovery window must be 7-30 days", true)
+						return a, nil
+					}
+					recoveryWindow = val
+				} else {
+					a.footer.SetMessage("Invalid recovery window (must be a number)", true)
+					return a, nil
+				}
+			}
+			a.pendingAction = nil
+			a.confirmDialog.Reset()
+			return a, a.deleteSecret(deleteAction.SecretID, deleteAction.SecretName, recoveryWindow)
+		}
+
+		if viewAction, ok := a.pendingAction.(*handlers.ViewSecretAction); ok {
+			a.pendingAction = nil
+			a.confirmDialog.Reset()
+			return a, a.loadAndViewSecret(viewAction.SecretID, viewAction.SecretName)
+		}
+
+		a.pendingAction = nil
+		a.confirmDialog.Reset()
+		return a, nil
+
+	case "n", "N", "esc":
+		// User cancelled
+		a.mode = ModeNormal
+		a.pendingAction = nil
+		a.confirmDialog.Reset()
+		return a, nil
+
+	default:
+		// Route input to confirm dialog if it has input field
+		if a.confirmDialog.HasInput() {
+			var cmd tea.Cmd
+			a.confirmDialog, cmd = a.confirmDialog.Update(msg)
+			return a, cmd
+		}
+	}
+
+	return a, nil
+}
+
+// handleSecretEditorMode handles secret editor input
+func (a *App) handleSecretEditorMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		// Cancel editing
+		a.state = StateResourceList
+		return a, nil
+
+	case "ctrl+s":
+		// Save secret
+		a.footer.SetLoading(true, "Saving secret...")
+		return a, a.saveSecret()
+	}
+
+	// Pass other keys to editor
+	var cmd tea.Cmd
+	a.secretEditor, cmd = a.secretEditor.Update(msg)
+	return a, cmd
+}
+
+// handleSecretCreatorMode handles secret creator input
+func (a *App) handleSecretCreatorMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		// Cancel creation
+		a.state = StateResourceList
+		a.secretCreator.Reset()
+		return a, nil
+
+	case "ctrl+s":
+		// Submit form
+		if err := a.secretCreator.Validate(); err != nil {
+			a.footer.SetMessage("Please fix validation errors", true)
+			return a, nil
+		}
+		a.footer.SetLoading(true, "Creating secret...")
+		params := a.secretCreator.GetParams()
+		return a, a.createSecret(params)
+	}
+
+	// Pass to creator for field handling
+	var cmd tea.Cmd
+	a.secretCreator, cmd = a.secretCreator.Update(msg)
+	return a, cmd
+}
+
+// loadAndViewSecret loads a secret value for viewing
+func (a *App) loadAndViewSecret(secretID, secretName string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		handler, ok := a.registry.Get("secrets")
+		if !ok {
+			return SecretLoadErrorMsg{err: fmt.Errorf("secrets handler not found")}
+		}
+
+		secretsHandler, ok := handler.(*handlers.SecretsHandler)
+		if !ok {
+			return SecretLoadErrorMsg{err: fmt.Errorf("invalid handler type")}
+		}
+
+		value, err := secretsHandler.GetSecretValueForView(ctx, secretID)
+		if err != nil {
+			return SecretLoadErrorMsg{err: err}
+		}
+
+		return SecretLoadedMsg{
+			name:  secretName,
+			value: value,
+		}
+	}
+}
+
+// loadSecretForEditing loads a secret value for editing
+func (a *App) loadSecretForEditing(secretID, secretName string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		handler, ok := a.registry.Get("secrets")
+		if !ok {
+			return SecretLoadErrorMsg{err: fmt.Errorf("secrets handler not found")}
+		}
+
+		secretsHandler, ok := handler.(*handlers.SecretsHandler)
+		if !ok {
+			return SecretLoadErrorMsg{err: fmt.Errorf("invalid handler type")}
+		}
+
+		value, err := secretsHandler.GetSecretValueForEdit(ctx, secretID)
+		if err != nil {
+			return SecretLoadErrorMsg{err: err}
+		}
+
+		return SecretLoadedForEditMsg{
+			id:    secretID,
+			name:  secretName,
+			value: value,
+		}
+	}
+}
+
+// saveSecret saves the current secret being edited
+func (a *App) saveSecret() tea.Cmd {
+	return func() tea.Msg {
+		value, err := a.secretEditor.Value()
+		if err != nil {
+			return SecretSaveErrorMsg{err: err}
+		}
+
+		ctx := context.Background()
+		handler, ok := a.registry.Get("secrets")
+		if !ok {
+			return SecretSaveErrorMsg{err: fmt.Errorf("secrets handler not found")}
+		}
+
+		secretsHandler, ok := handler.(*handlers.SecretsHandler)
+		if !ok {
+			return SecretSaveErrorMsg{err: fmt.Errorf("invalid handler type")}
+		}
+
+		secretID := a.secretEditor.GetSecretID()
+		updates := map[string]interface{}{
+			"SecretValue": value,
+		}
+
+		if err := secretsHandler.Update(ctx, secretID, updates); err != nil {
+			return SecretSaveErrorMsg{err: err}
+		}
+
+		return SecretSavedMsg{secretID: secretID}
+	}
+}
+
+func (a *App) createSecret(params map[string]interface{}) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		handler, ok := a.registry.Get("secrets")
+		if !ok {
+			return SecretCreateErrorMsg{err: fmt.Errorf("secrets handler not found")}
+		}
+
+		secretsHandler, ok := handler.(*handlers.SecretsHandler)
+		if !ok {
+			return SecretCreateErrorMsg{err: fmt.Errorf("invalid handler type")}
+		}
+
+		_, err := secretsHandler.Create(ctx, params)
+		if err != nil {
+			return SecretCreateErrorMsg{err: err}
+		}
+
+		secretName, _ := params["Name"].(string)
+		return SecretCreatedMsg{secretName: secretName}
+	}
+}
+
+func (a *App) deleteSecret(secretID, secretName string, recoveryWindowDays int) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		handler, ok := a.registry.Get("secrets")
+		if !ok {
+			return SecretDeleteErrorMsg{err: fmt.Errorf("secrets handler not found")}
+		}
+
+		secretsHandler, ok := handler.(*handlers.SecretsHandler)
+		if !ok {
+			return SecretDeleteErrorMsg{err: fmt.Errorf("invalid handler type")}
+		}
+
+		err := secretsHandler.DeleteWithRecoveryWindow(ctx, secretID, recoveryWindowDays)
+		if err != nil {
+			return SecretDeleteErrorMsg{err: err}
+		}
+
+		return SecretDeletedMsg{secretID: secretID}
+	}
 }

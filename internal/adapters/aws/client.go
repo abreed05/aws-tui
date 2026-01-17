@@ -7,6 +7,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
@@ -36,6 +37,7 @@ type ClientManager struct {
 	ecsClient    *ecs.Client
 	lambdaClient *lambda.Client
 	s3Client     *s3.Client
+	logsClient   *cloudwatchlogs.Client
 }
 
 // NewClientManager creates a new AWS client manager
@@ -85,6 +87,7 @@ func (cm *ClientManager) Configure(ctx context.Context, profile, region string) 
 	cm.ecsClient = nil
 	cm.lambdaClient = nil
 	cm.s3Client = nil
+	cm.logsClient = nil
 	cm.accountID = ""
 
 	return nil
@@ -234,6 +237,17 @@ func (cm *ClientManager) S3() *s3.Client {
 		cm.s3Client = s3.NewFromConfig(cm.currentConfig)
 	}
 	return cm.s3Client
+}
+
+// CloudWatchLogs returns the CloudWatch Logs client (lazily initialized)
+func (cm *ClientManager) CloudWatchLogs() *cloudwatchlogs.Client {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	if cm.logsClient == nil {
+		cm.logsClient = cloudwatchlogs.NewFromConfig(cm.currentConfig)
+	}
+	return cm.logsClient
 }
 
 // STS returns the STS client (lazily initialized)

@@ -38,6 +38,7 @@ func NewAutocomplete() *Autocomplete {
 		"rds",
 		"ecs",
 		"lambda",
+		"logs",
 		"s3",
 		"sso",
 		"sso-login",

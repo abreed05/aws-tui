@@ -4,7 +4,7 @@ Terminal UI for browsing AWS resources. Built with Go and [Bubble Tea](https://g
 
 ## Supported Resources
 
-EC2, VPC, Security Groups, IAM (Users/Roles/Policies), RDS, ECS, Lambda, S3, KMS, Secrets Manager
+EC2, VPC, Security Groups, IAM (Users/Roles/Policies), RDS, ECS, Lambda, S3, KMS, Secrets Manager, CloudWatch Logs
 
 ## Requirements
 
@@ -44,7 +44,7 @@ AWS_PROFILE=myprofile ./bin/aws-tui
 | `esc` | Back |
 | `q` | Quit |
 
-Commands: `:users`, `:roles`, `:policies`, `:ec2`, `:vpc`, `:sg`, `:rds`, `:ecs`, `:lambda`, `:s3`, `:kms`, `:secrets`
+Commands: `:users`, `:roles`, `:policies`, `:ec2`, `:vpc`, `:sg`, `:rds`, `:ecs`, `:lambda`, `:s3`, `:kms`, `:secrets`, `:logs`
 
 ## Themes
 

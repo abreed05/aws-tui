@@ -173,9 +173,115 @@ func (h *SecretsHandler) Describe(ctx context.Context, id string) (map[string]in
 
 func (h *SecretsHandler) Actions() []Action {
 	return []Action{
+		{Key: "v", Name: "view", Description: "View secret value"},
+		{Key: "e", Name: "edit", Description: "Edit secret value"},
+		{Key: "c", Name: "create", Description: "Create new secret"},
+		{Key: "x", Name: "delete", Description: "Delete secret"},
 		{Key: "r", Name: "rotation", Description: "View rotation configuration"},
-		{Key: "v", Name: "versions", Description: "View secret versions"},
 	}
+}
+
+func (h *SecretsHandler) ExecuteAction(ctx context.Context, action string, resourceID string) error {
+	switch action {
+	case "view":
+		return &ViewSecretAction{
+			SecretID:   resourceID,
+			SecretName: resourceID,
+		}
+	case "edit":
+		return &EditSecretAction{
+			SecretID:   resourceID,
+			SecretName: resourceID,
+		}
+	case "create":
+		return &CreateSecretAction{}
+	case "delete":
+		return &DeleteSecretAction{
+			SecretID:   resourceID,
+			SecretName: resourceID,
+		}
+	default:
+		return ErrNotSupported
+	}
+}
+
+func (h *SecretsHandler) CanEdit() bool {
+	return true
+}
+
+func (h *SecretsHandler) CanDelete() bool {
+	return true
+}
+
+func (h *SecretsHandler) Update(ctx context.Context, id string, updates map[string]interface{}) error {
+	// Extract secret value from updates
+	secretValue, ok := updates["SecretValue"].(string)
+	if !ok {
+		return fmt.Errorf("invalid secret value")
+	}
+
+	return h.client.UpdateSecretValue(ctx, id, secretValue)
+}
+
+func (h *SecretsHandler) Create(ctx context.Context, params map[string]interface{}) (Resource, error) {
+	// Extract parameters
+	name, ok := params["Name"].(string)
+	if !ok || name == "" {
+		return nil, fmt.Errorf("name is required")
+	}
+
+	value, ok := params["Value"].(string)
+	if !ok || value == "" {
+		return nil, fmt.Errorf("value is required")
+	}
+
+	description, _ := params["Description"].(string)
+
+	tags := make(map[string]string)
+	if tagsInterface, ok := params["Tags"].(map[string]string); ok {
+		tags = tagsInterface
+	}
+
+	createParams := smadapter.CreateSecretParams{
+		Name:        name,
+		SecretValue: value,
+		Description: description,
+		Tags:        tags,
+	}
+
+	secret, err := h.client.CreateSecret(ctx, createParams)
+	if err != nil {
+		return nil, NewHandlerError("CREATE_FAILED", "failed to create secret", err)
+	}
+
+	return &SecretResource{
+		secret: *secret,
+		region: h.region,
+	}, nil
+}
+
+func (h *SecretsHandler) Delete(ctx context.Context, id string) error {
+	// Default recovery window
+	return h.DeleteWithRecoveryWindow(ctx, id, 30)
+}
+
+// DeleteWithRecoveryWindow allows specifying recovery window
+func (h *SecretsHandler) DeleteWithRecoveryWindow(ctx context.Context, id string, recoveryWindowDays int) error {
+	err := h.client.DeleteSecret(ctx, id, int32(recoveryWindowDays))
+	if err != nil {
+		return NewHandlerError("DELETE_FAILED", fmt.Sprintf("failed to delete secret %s", id), err)
+	}
+	return nil
+}
+
+// GetSecretValueForView retrieves secret value for viewing
+func (h *SecretsHandler) GetSecretValueForView(ctx context.Context, secretID string) (string, error) {
+	return h.client.GetSecretValue(ctx, secretID)
+}
+
+// GetSecretValueForEdit retrieves secret value for editing
+func (h *SecretsHandler) GetSecretValueForEdit(ctx context.Context, secretID string) (string, error) {
+	return h.client.GetSecretValue(ctx, secretID)
 }
 
 // SecretResource implements Resource interface for Secrets Manager secrets
@@ -234,3 +340,48 @@ func (r *SecretResource) ToDetailMap() map[string]interface{} {
 		"OwningService":   r.secret.OwningService,
 	}
 }
+
+// ViewSecretAction is returned by ExecuteAction to trigger viewing a secret
+type ViewSecretAction struct {
+	SecretID   string
+	SecretName string
+}
+
+func (a *ViewSecretAction) Error() string {
+	return fmt.Sprintf("view secret %s", a.SecretName)
+}
+
+func (a *ViewSecretAction) IsActionMsg() {}
+
+// EditSecretAction is returned by ExecuteAction to trigger editing a secret
+type EditSecretAction struct {
+	SecretID   string
+	SecretName string
+}
+
+func (a *EditSecretAction) Error() string {
+	return fmt.Sprintf("edit secret %s", a.SecretName)
+}
+
+func (a *EditSecretAction) IsActionMsg() {}
+
+// CreateSecretAction triggers the secret creation form
+type CreateSecretAction struct{}
+
+func (a *CreateSecretAction) Error() string {
+	return "create secret"
+}
+
+func (a *CreateSecretAction) IsActionMsg() {}
+
+// DeleteSecretAction triggers the delete confirmation
+type DeleteSecretAction struct {
+	SecretID   string
+	SecretName string
+}
+
+func (a *DeleteSecretAction) Error() string {
+	return fmt.Sprintf("delete secret %s", a.SecretName)
+}
+
+func (a *DeleteSecretAction) IsActionMsg() {}

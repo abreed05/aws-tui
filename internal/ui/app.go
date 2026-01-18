@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -239,6 +240,9 @@ func (a *App) registerHandlers() {
 
 	// Register S3 handlers
 	a.registry.Register(handlers.NewS3BucketsHandler(a.clientMgr.S3(), a.clientMgr.Region()))
+
+	// Register DynamoDB handlers
+	a.registry.Register(handlers.NewDynamoDBTablesHandler(a.clientMgr.DynamoDB(), a.clientMgr.Region()))
 }
 
 // Internal messages
@@ -325,6 +329,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.header.SetProfile(msg.profile)
 		a.header.SetRegion(msg.region)
 		a.header.SetAccountID(msg.accountID)
+		a.header.SetContext("Home")
 		a.initialized = true
 
 		// Register handlers now that AWS is configured
@@ -437,6 +442,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		)
 		a.state = StateResourceList
 		a.breadcrumb.SetPath("ECS", "Clusters", msg.ClusterName, "Services")
+		a.header.SetContext("ECS")
 		a.resourceList.SetHandler(handler)
 		a.footer.SetHandlerActions(handler.Actions())
 		a.loading = true
@@ -467,6 +473,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.breadcrumb.SetPath("ECS", "Clusters", msg.ClusterName, "Tasks")
 		}
 		a.state = StateResourceList
+		a.header.SetContext("ECS")
 		a.resourceList.SetHandler(handler)
 		a.footer.SetHandlerActions(handler.Actions())
 		a.loading = true
@@ -484,10 +491,29 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		)
 		a.state = StateResourceList
 		a.breadcrumb.SetPath("CloudWatch Logs", "Log Groups", msg.LogGroupName, "Log Streams")
+		a.header.SetContext("CloudWatch Logs")
 		a.resourceList.SetHandler(handler)
 		a.footer.SetHandlerActions(handler.Actions())
 		a.loading = true
 		a.footer.SetLoading(true, "Loading log streams...")
+		contentHeight := a.calculateContentHeight()
+		a.resourceList.SetSize(a.width, contentHeight)
+		return a, a.resourceList.LoadResources(context.Background(), "")
+
+	// DynamoDB Navigation actions
+	case *handlers.NavigateToItemsAction:
+		handler := handlers.NewDynamoDBItemsHandler(
+			a.clientMgr.DynamoDB(),
+			a.clientMgr.Region(),
+			msg.TableName,
+		)
+		a.state = StateResourceList
+		a.breadcrumb.SetPath("DynamoDB", "Tables", msg.TableName, "Items")
+		a.header.SetContext("DynamoDB")
+		a.resourceList.SetHandler(handler)
+		a.footer.SetHandlerActions(handler.Actions())
+		a.loading = true
+		a.footer.SetLoading(true, "Loading items...")
 		contentHeight := a.calculateContentHeight()
 		a.resourceList.SetSize(a.width, contentHeight)
 		return a, a.resourceList.LoadResources(context.Background(), "")
@@ -527,6 +553,24 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			msg.SecretName,
 		))
 		a.confirmDialog.RequireInput("Recovery window (days, 7-30)", "30", 7, 30)
+		a.confirmDialog.SetWidth(a.width)
+		return a, nil
+
+	// DynamoDB Item actions
+	case *handlers.EditItemAction:
+		// Load item and enter editor
+		a.footer.SetLoading(true, "Loading item...")
+		return a, a.loadItemForEditing(msg.ItemID, msg.TableName, msg.ItemKey)
+
+	case *handlers.DeleteItemAction:
+		// Show confirmation dialog
+		a.mode = ModeConfirm
+		a.pendingAction = msg
+		a.confirmDialog.SetMessage(fmt.Sprintf(
+			"You are about to delete this item:\n\n%s\n\nfrom table: %s\n\nThis action cannot be undone.",
+			msg.ItemKey,
+			msg.TableName,
+		))
 		a.confirmDialog.SetWidth(a.width)
 		return a, nil
 
@@ -672,6 +716,46 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.footer.SetMessage(fmt.Sprintf("Operation failed: %v", msg.err), true)
 		a.footer.SetLoading(false, "")
 		return a, nil
+
+	// DynamoDB Item operation messages
+	case ItemLoadedForEditMsg:
+		// Enter editor mode with the item data
+		a.state = StateSecretEditor
+		itemJSON, _ := json.Marshal(msg.itemData)
+		a.secretEditor.SetSecret(msg.itemID, msg.itemKey, string(itemJSON))
+		contentHeight := a.calculateContentHeight()
+		a.secretEditor.SetSize(a.width, contentHeight)
+		a.footer.SetLoading(false, "")
+		return a, nil
+
+	case ItemSavedMsg:
+		// Return to list view
+		a.state = StateResourceList
+		a.footer.SetMessage("Item updated successfully", false)
+		a.footer.SetLoading(false, "")
+		// Refresh the list
+		return a, a.resourceList.LoadResources(context.Background(), "")
+
+	case ItemSaveErrorMsg:
+		a.footer.SetMessage(fmt.Sprintf("Failed to save item: %v", msg.err), true)
+		a.footer.SetLoading(false, "")
+		return a, nil
+
+	case ItemDeletedMsg:
+		a.footer.SetMessage("Item deleted successfully", false)
+		a.footer.SetLoading(false, "")
+		// Refresh the list
+		return a, a.resourceList.LoadResources(context.Background(), "")
+
+	case ItemDeleteErrorMsg:
+		a.footer.SetMessage(fmt.Sprintf("Failed to delete item: %v", msg.err), true)
+		a.footer.SetLoading(false, "")
+		return a, nil
+
+	case ItemLoadErrorMsg:
+		a.footer.SetMessage(fmt.Sprintf("Failed to load item: %v", msg.err), true)
+		a.footer.SetLoading(false, "")
+		return a, nil
 	}
 
 	// Route to resource list if in that state
@@ -690,8 +774,8 @@ func (a *App) calculateContentHeight() int {
 	if a.height == 0 {
 		return 0
 	}
-	// Header + breadcrumb + footer = roughly 3 lines
-	return a.height - 3
+	// Header (7 lines) + breadcrumb (1 line) + footer (1 line) = 9 lines
+	return a.height - 9
 }
 
 func (a *App) handleNormalMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -707,6 +791,7 @@ func (a *App) handleNormalMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// Go back to home
 			a.state = StateHome
 			a.breadcrumb.SetPath("Home")
+			a.header.SetContext("Home")
 			a.footer.ClearPagination()
 			a.footer.ClearHandlerActions()
 			return a, nil
@@ -839,6 +924,7 @@ func (a *App) executeCommand(input string) (tea.Model, tea.Cmd) {
 	case "home":
 		a.state = StateHome
 		a.breadcrumb.SetPath("Home")
+		a.header.SetContext("Home")
 		return a, nil
 
 	case "profile":
@@ -894,6 +980,9 @@ func (a *App) executeCommand(input string) (tea.Model, tea.Cmd) {
 	case "s3":
 		return a.navigateToResource("s3", "S3", "Buckets")
 
+	case "dynamodb":
+		return a.navigateToResource("dynamodb", "DynamoDB", "Tables")
+
 	case "export":
 		if len(args) == 0 {
 			a.footer.SetMessage("Usage: :export json|yaml", true)
@@ -919,6 +1008,12 @@ func (a *App) navigateToResource(shortcut string, breadcrumbParts ...string) (te
 
 	a.state = StateResourceList
 	a.breadcrumb.SetPath(breadcrumbParts...)
+
+	// Set header context to the first breadcrumb part (main resource category)
+	if len(breadcrumbParts) > 0 {
+		a.header.SetContext(breadcrumbParts[0])
+	}
+
 	a.resourceList.SetHandler(handler)
 	a.footer.SetHandlerActions(handler.Actions())
 	a.loading = true
@@ -1203,6 +1298,7 @@ func (a *App) renderHome(height int) string {
   :lambda     - List Lambda Functions
   :logs       - List CloudWatch Log Groups
   :s3         - List S3 Buckets
+  :dynamodb   - List DynamoDB Tables
   :kms        - List KMS Keys
   :secrets    - List Secrets
   :profile    - Switch AWS Profile
@@ -1350,6 +1446,34 @@ type EC2InstanceOperationErrorMsg struct {
 	err error
 }
 
+// DynamoDB Item operation messages
+type ItemLoadedForEditMsg struct {
+	itemID    string
+	tableName string
+	itemKey   string
+	itemData  map[string]interface{}
+}
+
+type ItemSavedMsg struct {
+	itemID string
+}
+
+type ItemSaveErrorMsg struct {
+	err error
+}
+
+type ItemDeletedMsg struct {
+	itemID string
+}
+
+type ItemDeleteErrorMsg struct {
+	err error
+}
+
+type ItemLoadErrorMsg struct {
+	err error
+}
+
 // handleConfirmMode handles confirmation dialog input
 func (a *App) handleConfirmMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
@@ -1381,6 +1505,13 @@ func (a *App) handleConfirmMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.pendingAction = nil
 			a.confirmDialog.Reset()
 			return a, a.loadAndViewSecret(viewAction.SecretID, viewAction.SecretName)
+		}
+
+		if deleteItemAction, ok := a.pendingAction.(*handlers.DeleteItemAction); ok {
+			a.pendingAction = nil
+			a.confirmDialog.Reset()
+			a.footer.SetLoading(true, "Deleting item...")
+			return a, a.deleteItem(deleteItemAction.ItemID, deleteItemAction.TableName)
 		}
 
 		a.pendingAction = nil
@@ -1415,9 +1546,23 @@ func (a *App) handleSecretEditorMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case "ctrl+s":
-		// Save secret
-		a.footer.SetLoading(true, "Saving secret...")
-		return a, a.saveSecret()
+		// Determine what we're editing based on the handler type
+		handler := a.resourceList.Handler()
+		if _, ok := handler.(*handlers.DynamoDBItemsHandler); ok {
+			// Editing a DynamoDB item
+			a.footer.SetLoading(true, "Saving item...")
+			itemID := a.secretEditor.GetSecretID()
+			// Extract table name from breadcrumb or handler
+			tableName := ""
+			if h, ok := handler.(*handlers.DynamoDBItemsHandler); ok {
+				tableName = h.ResourceType() // This will work if we have the table name available
+			}
+			return a, a.saveItem(itemID, tableName)
+		} else {
+			// Editing a secret
+			a.footer.SetLoading(true, "Saving secret...")
+			return a, a.saveSecret()
+		}
 	}
 
 	// Pass other keys to editor
@@ -1807,5 +1952,82 @@ func (a *App) loadBucketPolicy(bucketName string) tea.Cmd {
 			title: fmt.Sprintf("Bucket Policy for: %s", bucketName),
 			data:  data,
 		}
+	}
+}
+
+// DynamoDB Item operation functions
+
+func (a *App) loadItemForEditing(itemID, tableName, itemKey string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+
+		// Get the DynamoDB items handler
+		handler := a.resourceList.Handler()
+		itemsHandler, ok := handler.(*handlers.DynamoDBItemsHandler)
+		if !ok {
+			return ItemLoadErrorMsg{err: fmt.Errorf("invalid handler type")}
+		}
+
+		// Describe the item to get its full data
+		itemData, err := itemsHandler.Describe(ctx, itemID)
+		if err != nil {
+			return ItemLoadErrorMsg{err: err}
+		}
+
+		return ItemLoadedForEditMsg{
+			itemID:    itemID,
+			tableName: tableName,
+			itemKey:   itemKey,
+			itemData:  itemData,
+		}
+	}
+}
+
+func (a *App) saveItem(itemID, tableName string) tea.Cmd {
+	return func() tea.Msg {
+		value, err := a.secretEditor.Value()
+		if err != nil {
+			return ItemSaveErrorMsg{err: err}
+		}
+
+		// Parse the JSON value
+		var itemData map[string]interface{}
+		if err := json.Unmarshal([]byte(value), &itemData); err != nil {
+			return ItemSaveErrorMsg{err: fmt.Errorf("invalid JSON: %w", err)}
+		}
+
+		ctx := context.Background()
+		handler := a.resourceList.Handler()
+		itemsHandler, ok := handler.(*handlers.DynamoDBItemsHandler)
+		if !ok {
+			return ItemSaveErrorMsg{err: fmt.Errorf("invalid handler type")}
+		}
+
+		updates := map[string]interface{}{
+			"item": itemData,
+		}
+
+		if err := itemsHandler.Update(ctx, itemID, updates); err != nil {
+			return ItemSaveErrorMsg{err: err}
+		}
+
+		return ItemSavedMsg{itemID: itemID}
+	}
+}
+
+func (a *App) deleteItem(itemID, tableName string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		handler := a.resourceList.Handler()
+		itemsHandler, ok := handler.(*handlers.DynamoDBItemsHandler)
+		if !ok {
+			return ItemDeleteErrorMsg{err: fmt.Errorf("invalid handler type")}
+		}
+
+		if err := itemsHandler.Delete(ctx, itemID); err != nil {
+			return ItemDeleteErrorMsg{err: err}
+		}
+
+		return ItemDeletedMsg{itemID: itemID}
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
@@ -28,16 +29,17 @@ type ClientManager struct {
 	accountID     string
 
 	// Lazily initialized service clients
-	iamClient    *iam.Client
-	ec2Client    *ec2.Client
-	kmsClient    *kms.Client
-	smClient     *secretsmanager.Client
-	stsClient    *sts.Client
-	rdsClient    *rds.Client
-	ecsClient    *ecs.Client
-	lambdaClient *lambda.Client
-	s3Client     *s3.Client
-	logsClient   *cloudwatchlogs.Client
+	iamClient      *iam.Client
+	ec2Client      *ec2.Client
+	kmsClient      *kms.Client
+	smClient       *secretsmanager.Client
+	stsClient      *sts.Client
+	rdsClient      *rds.Client
+	ecsClient      *ecs.Client
+	lambdaClient   *lambda.Client
+	s3Client       *s3.Client
+	logsClient     *cloudwatchlogs.Client
+	dynamodbClient *dynamodb.Client
 }
 
 // NewClientManager creates a new AWS client manager
@@ -88,6 +90,7 @@ func (cm *ClientManager) Configure(ctx context.Context, profile, region string) 
 	cm.lambdaClient = nil
 	cm.s3Client = nil
 	cm.logsClient = nil
+	cm.dynamodbClient = nil
 	cm.accountID = ""
 
 	return nil
@@ -263,6 +266,17 @@ func (cm *ClientManager) getSTS() *sts.Client {
 		cm.stsClient = sts.NewFromConfig(cm.currentConfig)
 	}
 	return cm.stsClient
+}
+
+// DynamoDB returns the DynamoDB client (lazily initialized)
+func (cm *ClientManager) DynamoDB() *dynamodb.Client {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	if cm.dynamodbClient == nil {
+		cm.dynamodbClient = dynamodb.NewFromConfig(cm.currentConfig)
+	}
+	return cm.dynamodbClient
 }
 
 // ValidateCredentials checks if the current credentials are valid

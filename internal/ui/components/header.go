@@ -2,6 +2,7 @@ package components
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 
@@ -10,11 +11,12 @@ import (
 
 // Header displays the top bar with profile, region, and account info
 type Header struct {
-	profile   string
-	region    string
-	accountID string
-	width     int
-	theme     styles.Theme
+	profile     string
+	region      string
+	accountID   string
+	context     string // Current resource context (e.g., "EC2", "DynamoDB", "Home")
+	width       int
+	theme       styles.Theme
 }
 
 // NewHeader creates a new header component
@@ -49,49 +51,119 @@ func (h *Header) SetWidth(width int) {
 	h.width = width
 }
 
+// SetContext updates the current resource context
+func (h *Header) SetContext(context string) {
+	h.context = context
+}
+
 // View renders the header
 func (h *Header) View() string {
-	// Left side: App name and context
-	title := lipgloss.NewStyle().
+	// Define styles
+	boxStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("240"))
+
+	titleStyle := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(lipgloss.Color("229")).
-		Render("aws-tui")
+		Foreground(lipgloss.Color("51"))
 
-	profileStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("86")).
-		Bold(true)
+	contextStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("201"))
 
-	regionStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("212"))
+	labelStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("243"))
 
-	accountStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("245"))
+	valueStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("229"))
 
-	left := fmt.Sprintf("%s  %s  %s",
-		title,
-		profileStyle.Render("Profile: "+h.profile),
-		regionStyle.Render("Region: "+h.region),
+	// Build the ASCII art logo (each is 6 chars wide)
+	logo := []string{
+		"╔═══╗ ",
+		"║AWS║ ",
+		"╚═══╝ ",
+	}
+
+	// Build context section
+	contextDisplay := h.context
+	if contextDisplay == "" {
+		contextDisplay = "Home"
+	}
+
+	// Build info lines with proper spacing
+	line1 := fmt.Sprintf(" %s %s",
+		labelStyle.Render("Profile:"),
+		valueStyle.Render(h.profile),
 	)
 
+	line2 := fmt.Sprintf(" %s %s",
+		labelStyle.Render("Region: "),
+		valueStyle.Render(h.region),
+	)
+
+	line3 := ""
 	if h.accountID != "" {
-		left += "  " + accountStyle.Render("Account ID: "+h.accountID)
+		line3 = fmt.Sprintf(" %s %s",
+			labelStyle.Render("Account:"),
+			valueStyle.Render(h.accountID),
+		)
+	} else {
+		line3 = " "
 	}
 
-	// Right side: Status indicators
-	right := ""
+	// Calculate widths for layout (accounting for borders: 4 x "│")
+	logoWidth := 6     // Logo is 6 chars
+	infoWidth := 36    // Info section width
+	contextWidth := h.width - logoWidth - infoWidth - 4  // 4 borders
 
-	// Calculate padding
-	leftWidth := lipgloss.Width(left)
-	rightWidth := lipgloss.Width(right)
-	padding := h.width - leftWidth - rightWidth - 2
+	// Create the top border
+	topBorder := "┌" + strings.Repeat("─", logoWidth) + "┬" +
+		strings.Repeat("─", infoWidth) + "┬" +
+		strings.Repeat("─", contextWidth) + "┐"
 
-	if padding < 0 {
-		padding = 0
+	// Create bottom border
+	bottomBorder := "└" + strings.Repeat("─", h.width-2) + "┘"
+
+	// Build the context display centered
+	contextText := "[ " + contextDisplay + " ]"
+	contextPadding := contextWidth - len(contextText)
+	if contextPadding < 0 {
+		contextPadding = 0
 	}
+	leftPad := contextPadding / 2
+	rightPad := contextPadding - leftPad
+	centeredContext := strings.Repeat(" ", leftPad) + contextText + strings.Repeat(" ", rightPad)
 
-	spacer := lipgloss.NewStyle().Width(padding).Render("")
+	// Build rows ensuring exact widths
+	row1 := "│" + titleStyle.Render(logo[0]) + "│" +
+		lipgloss.NewStyle().Width(infoWidth).Render(line1) + "│" +
+		contextStyle.Render(centeredContext) + "│"
 
-	content := left + spacer + right
+	row2 := "│" + titleStyle.Render(logo[1]) + "│" +
+		lipgloss.NewStyle().Width(infoWidth).Render(line2) + "│" +
+		strings.Repeat(" ", contextWidth) + "│"
 
-	return h.theme.Header.Width(h.width).Render(content)
+	row3 := "│" + titleStyle.Render(logo[2]) + "│" +
+		lipgloss.NewStyle().Width(infoWidth).Render(line3) + "│" +
+		strings.Repeat(" ", contextWidth) + "│"
+
+	// Build title bar
+	titleBar := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("229")).
+		Background(lipgloss.Color("235")).
+		Width(h.width).
+		Align(lipgloss.Center).
+		Render("AWS Terminal UI")
+
+	// Combine all parts
+	return lipgloss.JoinVertical(
+		lipgloss.Left,
+		titleBar,
+		boxStyle.Render(topBorder),
+		boxStyle.Render(row1),
+		boxStyle.Render(row2),
+		boxStyle.Render(row3),
+		boxStyle.Render(bottomBorder),
+	)
 }

@@ -40,6 +40,7 @@ func NewAutocomplete() *Autocomplete {
 		"lambda",
 		"logs",
 		"s3",
+		"dynamodb",
 		"sso",
 		"sso-login",
 	}

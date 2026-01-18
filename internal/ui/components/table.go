@@ -29,6 +29,10 @@ type Table struct {
 	filter     string
 	filtered   []int // Indices of filtered rows
 
+	// Sort state
+	sortColumn    int  // -1 for no sort, otherwise column index
+	sortAscending bool
+
 	// Dimensions
 	width  int
 	height int
@@ -43,9 +47,11 @@ type Table struct {
 // NewTable creates a new table component
 func NewTable(theme styles.Theme) *Table {
 	return &Table{
-		theme:    theme,
-		focused:  true,
-		filtered: make([]int, 0),
+		theme:         theme,
+		focused:       true,
+		filtered:      make([]int, 0),
+		sortColumn:    -1,
+		sortAscending: true,
 	}
 }
 
@@ -149,6 +155,120 @@ func (t *Table) IsFocused() bool {
 // Len returns the number of visible rows
 func (t *Table) Len() int {
 	return len(t.filtered)
+}
+
+// CycleSortColumn cycles to the next sortable column
+func (t *Table) CycleSortColumn() {
+	if len(t.columns) == 0 {
+		return
+	}
+
+	// Find sortable columns
+	sortableColumns := make([]int, 0)
+	for i, col := range t.columns {
+		if col.Sortable {
+			sortableColumns = append(sortableColumns, i)
+		}
+	}
+
+	if len(sortableColumns) == 0 {
+		return
+	}
+
+	// Find current position in sortable columns
+	currentPos := -1
+	for i, colIdx := range sortableColumns {
+		if colIdx == t.sortColumn {
+			currentPos = i
+			break
+		}
+	}
+
+	// Move to next sortable column
+	nextPos := (currentPos + 1) % len(sortableColumns)
+	t.sortColumn = sortableColumns[nextPos]
+	t.sortAscending = true // Reset to ascending when changing column
+
+	// Apply sort
+	t.Sort()
+}
+
+// ToggleSortDirection reverses the sort direction
+func (t *Table) ToggleSortDirection() {
+	if t.sortColumn == -1 {
+		return
+	}
+	t.sortAscending = !t.sortAscending
+	t.Sort()
+}
+
+// Sort sorts the resources based on current sort settings
+func (t *Table) Sort() {
+	if t.sortColumn == -1 || t.sortColumn >= len(t.columns) || len(t.resources) == 0 {
+		return
+	}
+
+	// Create a slice of indices to sort
+	indices := make([]int, len(t.resources))
+	for i := range indices {
+		indices[i] = i
+	}
+
+	// Sort indices based on the row values
+	sortColumn := t.sortColumn
+	ascending := t.sortAscending
+
+	// Use a stable sort
+	// Compare function
+	less := func(i, j int) bool {
+		if i >= len(t.rows) || j >= len(t.rows) {
+			return false
+		}
+		rowI := t.rows[i]
+		rowJ := t.rows[j]
+		if sortColumn >= len(rowI) || sortColumn >= len(rowJ) {
+			return false
+		}
+
+		valI := strings.ToLower(rowI[sortColumn])
+		valJ := strings.ToLower(rowJ[sortColumn])
+
+		if ascending {
+			return valI < valJ
+		}
+		return valI > valJ
+	}
+
+	// Sort using bubble sort to maintain stability
+	for i := 0; i < len(indices)-1; i++ {
+		for j := 0; j < len(indices)-i-1; j++ {
+			if less(indices[j+1], indices[j]) {
+				indices[j], indices[j+1] = indices[j+1], indices[j]
+			}
+		}
+	}
+
+	// Reorder resources and rows based on sorted indices
+	newResources := make([]handlers.Resource, len(t.resources))
+	newRows := make([][]string, len(t.rows))
+	for i, idx := range indices {
+		newResources[i] = t.resources[idx]
+		newRows[i] = t.rows[idx]
+	}
+
+	t.resources = newResources
+	t.rows = newRows
+
+	// Reapply filter to update filtered indices
+	t.ApplyFilter(t.filter)
+}
+
+// GetSortInfo returns current sort information for display
+func (t *Table) GetSortInfo() (columnName string, ascending bool, active bool) {
+	if t.sortColumn == -1 || t.sortColumn >= len(t.columns) {
+		return "", true, false
+	}
+	return t.columns[t.sortColumn].Title, t.sortAscending, true
 }
 
 // Update handles messages
@@ -312,8 +432,20 @@ func (t *Table) renderHeader() string {
 	var cells []string
 	totalWidth := 0
 
-	for _, col := range t.columns {
-		cell := truncateOrPad(col.Title, col.Width)
+	for i, col := range t.columns {
+		title := col.Title
+
+		// Add sort indicator if this column is sorted
+		if i == t.sortColumn {
+			indicator := "↑"
+			if !t.sortAscending {
+				indicator = "↓"
+			}
+			// Add indicator and adjust title to fit width
+			title = title + " " + indicator
+		}
+
+		cell := truncateOrPad(title, col.Width)
 		cells = append(cells, cell)
 		totalWidth += col.Width + 1
 	}

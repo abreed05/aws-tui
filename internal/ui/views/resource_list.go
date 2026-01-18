@@ -276,8 +276,13 @@ func (v *ResourceListView) Update(msg tea.Msg) (*ResourceListView, tea.Cmd) {
 		return v, nil
 
 	case components.SearchClosedMsg:
+		// Ensure search is deactivated
+		v.search.Deactivate()
 		if msg.Query != "" {
 			v.table.ApplyFilter(msg.Query)
+		} else {
+			// Clear filter if query is empty
+			v.table.ApplyFilter("")
 		}
 		v.table.Focus()
 		return v, nil
@@ -359,6 +364,14 @@ func (v *ResourceListView) Update(msg tea.Msg) (*ResourceListView, tea.Cmd) {
 			return v, nil
 		}
 
+		// Handle escape to close search
+		if msg.String() == "esc" && v.search.IsActive() {
+			v.search.Deactivate()
+			v.search.Clear()
+			v.table.Focus()
+			return v, nil
+		}
+
 		// Handle escape to close detail
 		if msg.String() == "esc" && v.showDetail && !v.search.IsActive() {
 			v.showDetail = false
@@ -418,6 +431,17 @@ func (v *ResourceListView) Update(msg tea.Msg) (*ResourceListView, tea.Cmd) {
 					return v, nil
 				}
 			}
+		}
+
+		// Handle sorting
+		if msg.String() == "o" && !v.search.IsActive() && !v.tagFilter.IsActive() {
+			v.table.CycleSortColumn()
+			return v, nil
+		}
+
+		if msg.String() == "O" && !v.search.IsActive() && !v.tagFilter.IsActive() {
+			v.table.ToggleSortDirection()
+			return v, nil
 		}
 
 		// Handle tag filter activation (only if no action conflicts)

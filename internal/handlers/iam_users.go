@@ -238,6 +238,193 @@ func (h *IAMUsersHandler) Actions() []Action {
 	}
 }
 
+func (h *IAMUsersHandler) ExecuteAction(ctx context.Context, action string, resourceID string) error {
+	switch action {
+	case "policies":
+		return &ViewUserPoliciesAction{
+			UserName: resourceID,
+		}
+	case "groups":
+		return &ViewUserGroupsAction{
+			UserName: resourceID,
+		}
+	case "access-keys":
+		return &ViewUserAccessKeysAction{
+			UserName: resourceID,
+		}
+	case "mfa":
+		return &ViewUserMFAAction{
+			UserName: resourceID,
+		}
+	default:
+		return ErrNotSupported
+	}
+}
+
+// Action message types for IAM users
+
+// ViewUserPoliciesAction triggers viewing user policies
+type ViewUserPoliciesAction struct {
+	UserName string
+}
+
+func (a *ViewUserPoliciesAction) Error() string {
+	return fmt.Sprintf("view policies for user %s", a.UserName)
+}
+
+func (a *ViewUserPoliciesAction) IsActionMsg() {}
+
+// ViewUserGroupsAction triggers viewing user groups
+type ViewUserGroupsAction struct {
+	UserName string
+}
+
+func (a *ViewUserGroupsAction) Error() string {
+	return fmt.Sprintf("view groups for user %s", a.UserName)
+}
+
+func (a *ViewUserGroupsAction) IsActionMsg() {}
+
+// ViewUserAccessKeysAction triggers viewing user access keys
+type ViewUserAccessKeysAction struct {
+	UserName string
+}
+
+func (a *ViewUserAccessKeysAction) Error() string {
+	return fmt.Sprintf("view access keys for user %s", a.UserName)
+}
+
+func (a *ViewUserAccessKeysAction) IsActionMsg() {}
+
+// ViewUserMFAAction triggers viewing user MFA devices
+type ViewUserMFAAction struct {
+	UserName string
+}
+
+func (a *ViewUserMFAAction) Error() string {
+	return fmt.Sprintf("view MFA devices for user %s", a.UserName)
+}
+
+func (a *ViewUserMFAAction) IsActionMsg() {}
+
+// Helper methods to fetch specific user data
+
+// GetUserPolicies fetches attached and inline policies for a user
+func (h *IAMUsersHandler) GetUserPolicies(ctx context.Context, userName string) (map[string]interface{}, error) {
+	result := make(map[string]interface{})
+
+	// Get attached managed policies
+	policiesResult, err := h.client.ListAttachedUserPolicies(ctx, &iam.ListAttachedUserPoliciesInput{
+		UserName: aws.String(userName),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list attached policies: %w", err)
+	}
+
+	attachedPolicies := make([]map[string]string, 0, len(policiesResult.AttachedPolicies))
+	for _, p := range policiesResult.AttachedPolicies {
+		attachedPolicies = append(attachedPolicies, map[string]string{
+			"PolicyName": aws.ToString(p.PolicyName),
+			"PolicyArn":  aws.ToString(p.PolicyArn),
+		})
+	}
+	result["AttachedPolicies"] = attachedPolicies
+
+	// Get inline policies
+	inlineResult, err := h.client.ListUserPolicies(ctx, &iam.ListUserPoliciesInput{
+		UserName: aws.String(userName),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list inline policies: %w", err)
+	}
+	result["InlinePolicies"] = inlineResult.PolicyNames
+
+	return result, nil
+}
+
+// GetUserGroups fetches group memberships for a user
+func (h *IAMUsersHandler) GetUserGroups(ctx context.Context, userName string) ([]map[string]interface{}, error) {
+	groupsResult, err := h.client.ListGroupsForUser(ctx, &iam.ListGroupsForUserInput{
+		UserName: aws.String(userName),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list groups: %w", err)
+	}
+
+	groups := make([]map[string]interface{}, 0, len(groupsResult.Groups))
+	for _, g := range groupsResult.Groups {
+		groups = append(groups, map[string]interface{}{
+			"GroupName":  aws.ToString(g.GroupName),
+			"GroupId":    aws.ToString(g.GroupId),
+			"ARN":        aws.ToString(g.Arn),
+			"Path":       aws.ToString(g.Path),
+			"CreateDate": g.CreateDate.Format(time.RFC3339),
+		})
+	}
+
+	return groups, nil
+}
+
+// GetUserAccessKeys fetches access keys for a user
+func (h *IAMUsersHandler) GetUserAccessKeys(ctx context.Context, userName string) ([]map[string]interface{}, error) {
+	keysResult, err := h.client.ListAccessKeys(ctx, &iam.ListAccessKeysInput{
+		UserName: aws.String(userName),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list access keys: %w", err)
+	}
+
+	keys := make([]map[string]interface{}, 0, len(keysResult.AccessKeyMetadata))
+	for _, k := range keysResult.AccessKeyMetadata {
+		// Get last used info
+		lastUsedResult, err := h.client.GetAccessKeyLastUsed(ctx, &iam.GetAccessKeyLastUsedInput{
+			AccessKeyId: k.AccessKeyId,
+		})
+
+		lastUsed := "Never"
+		region := "N/A"
+		serviceName := "N/A"
+		if err == nil && lastUsedResult.AccessKeyLastUsed != nil {
+			if lastUsedResult.AccessKeyLastUsed.LastUsedDate != nil {
+				lastUsed = lastUsedResult.AccessKeyLastUsed.LastUsedDate.Format(time.RFC3339)
+			}
+			region = aws.ToString(lastUsedResult.AccessKeyLastUsed.Region)
+			serviceName = aws.ToString(lastUsedResult.AccessKeyLastUsed.ServiceName)
+		}
+
+		keys = append(keys, map[string]interface{}{
+			"AccessKeyId": aws.ToString(k.AccessKeyId),
+			"Status":      string(k.Status),
+			"CreateDate":  k.CreateDate.Format(time.RFC3339),
+			"LastUsed":    lastUsed,
+			"LastRegion":  region,
+			"LastService": serviceName,
+		})
+	}
+
+	return keys, nil
+}
+
+// GetUserMFADevices fetches MFA devices for a user
+func (h *IAMUsersHandler) GetUserMFADevices(ctx context.Context, userName string) ([]map[string]string, error) {
+	mfaResult, err := h.client.ListMFADevices(ctx, &iam.ListMFADevicesInput{
+		UserName: aws.String(userName),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list MFA devices: %w", err)
+	}
+
+	mfaDevices := make([]map[string]string, 0, len(mfaResult.MFADevices))
+	for _, m := range mfaResult.MFADevices {
+		mfaDevices = append(mfaDevices, map[string]string{
+			"SerialNumber": aws.ToString(m.SerialNumber),
+			"EnableDate":   m.EnableDate.Format(time.RFC3339),
+		})
+	}
+
+	return mfaDevices, nil
+}
+
 // IAMUserResource implements Resource interface for IAM users
 type IAMUserResource struct {
 	user           types.User

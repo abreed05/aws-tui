@@ -159,3 +159,102 @@ func convertInstance(inst types.Instance) Instance {
 
 	return result
 }
+
+// StartInstance starts a stopped EC2 instance
+func (c *InstancesClient) StartInstance(ctx context.Context, instanceID string) error {
+	_, err := c.client.StartInstances(ctx, &ec2.StartInstancesInput{
+		InstanceIds: []string{instanceID},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to start instance: %w", err)
+	}
+	return nil
+}
+
+// StopInstance stops a running EC2 instance
+func (c *InstancesClient) StopInstance(ctx context.Context, instanceID string) error {
+	_, err := c.client.StopInstances(ctx, &ec2.StopInstancesInput{
+		InstanceIds: []string{instanceID},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to stop instance: %w", err)
+	}
+	return nil
+}
+
+// RebootInstance reboots an EC2 instance
+func (c *InstancesClient) RebootInstance(ctx context.Context, instanceID string) error {
+	_, err := c.client.RebootInstances(ctx, &ec2.RebootInstancesInput{
+		InstanceIds: []string{instanceID},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to reboot instance: %w", err)
+	}
+	return nil
+}
+
+// GetInstanceConnectionInfo retrieves connection information for an instance
+func (c *InstancesClient) GetInstanceConnectionInfo(ctx context.Context, instanceID string) (map[string]interface{}, error) {
+	input := &ec2.DescribeInstancesInput{
+		InstanceIds: []string{instanceID},
+	}
+
+	result, err := c.client.DescribeInstances(ctx, input)
+	if err != nil {
+		return nil, fmt.Errorf("failed to describe instance: %w", err)
+	}
+
+	if len(result.Reservations) == 0 || len(result.Reservations[0].Instances) == 0 {
+		return nil, fmt.Errorf("instance not found")
+	}
+
+	inst := result.Reservations[0].Instances[0]
+
+	info := make(map[string]interface{})
+	info["InstanceId"] = aws.ToString(inst.InstanceId)
+	info["State"] = string(inst.State.Name)
+
+	if inst.PublicIpAddress != nil {
+		info["PublicIP"] = aws.ToString(inst.PublicIpAddress)
+	}
+
+	if inst.PrivateIpAddress != nil {
+		info["PrivateIP"] = aws.ToString(inst.PrivateIpAddress)
+	}
+
+	if inst.PublicDnsName != nil && aws.ToString(inst.PublicDnsName) != "" {
+		info["PublicDNS"] = aws.ToString(inst.PublicDnsName)
+	}
+
+	if inst.PrivateDnsName != nil && aws.ToString(inst.PrivateDnsName) != "" {
+		info["PrivateDNS"] = aws.ToString(inst.PrivateDnsName)
+	}
+
+	if inst.KeyName != nil {
+		info["KeyName"] = aws.ToString(inst.KeyName)
+	}
+
+	// Platform information
+	platform := "Linux/Unix"
+	if inst.Platform == types.PlatformValuesWindows {
+		platform = "Windows"
+	}
+	info["Platform"] = platform
+
+	// SSH/RDP command examples
+	if inst.PublicIpAddress != nil {
+		publicIP := aws.ToString(inst.PublicIpAddress)
+		if platform == "Windows" {
+			info["ConnectionCommand"] = fmt.Sprintf("RDP to: %s:3389", publicIP)
+		} else {
+			keyName := aws.ToString(inst.KeyName)
+			if keyName != "" {
+				info["ConnectionCommand"] = fmt.Sprintf("ssh -i ~/.ssh/%s.pem ec2-user@%s", keyName, publicIP)
+			} else {
+				info["ConnectionCommand"] = fmt.Sprintf("ssh ec2-user@%s", publicIP)
+			}
+		}
+	}
+
+	return info, nil
+}

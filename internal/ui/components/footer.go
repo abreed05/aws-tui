@@ -139,6 +139,7 @@ func (f *Footer) buildHelpHints() string {
 	// Add common hints
 	hints = append(hints,
 		fmt.Sprintf("%s %s", keyStyle.Render("/"), descStyle.Render("search")),
+		fmt.Sprintf("%s %s", keyStyle.Render("o"), descStyle.Render("sort")),
 		fmt.Sprintf("%s %s", keyStyle.Render(":"), descStyle.Render("cmd")),
 		fmt.Sprintf("%s %s", keyStyle.Render("d"), descStyle.Render("describe")),
 		fmt.Sprintf("%s %s", keyStyle.Render("c"), descStyle.Render("copy")),

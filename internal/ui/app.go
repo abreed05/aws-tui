@@ -82,6 +82,7 @@ type App struct {
 	secretEditor  *components.SecretEditor
 	secretCreator *components.SecretCreator
 	confirmDialog *components.ConfirmDialog
+	infoDialog    *components.InfoDialog
 	pendingAction interface{}
 
 	// Theme and keys
@@ -140,6 +141,7 @@ func NewApp(cfg *app.Config) (*App, error) {
 		secretEditor:     components.NewSecretEditor(theme),
 		secretCreator:    components.NewSecretCreator(theme),
 		confirmDialog:    components.NewConfirmDialog(theme),
+		infoDialog:       components.NewInfoDialog(theme),
 	}
 
 	// Load regions (static)
@@ -284,6 +286,13 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case ModeConfirm:
 			return a.handleConfirmMode(msg)
 		default:
+			// Handle info dialog if visible
+			if a.infoDialog.IsVisible() {
+				var cmd tea.Cmd
+				a.infoDialog, cmd = a.infoDialog.Update(msg)
+				return a, cmd
+			}
+
 			// Handle state-specific input in normal mode
 			if a.state == StateSecretEditor {
 				return a.handleSecretEditorMode(msg)
@@ -521,6 +530,45 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.confirmDialog.SetWidth(a.width)
 		return a, nil
 
+	// IAM Users actions
+	case *handlers.ViewUserPoliciesAction:
+		a.footer.SetLoading(true, "Loading policies...")
+		return a, a.loadUserPolicies(msg.UserName)
+
+	case *handlers.ViewUserGroupsAction:
+		a.footer.SetLoading(true, "Loading groups...")
+		return a, a.loadUserGroups(msg.UserName)
+
+	case *handlers.ViewUserAccessKeysAction:
+		a.footer.SetLoading(true, "Loading access keys...")
+		return a, a.loadUserAccessKeys(msg.UserName)
+
+	case *handlers.ViewUserMFAAction:
+		a.footer.SetLoading(true, "Loading MFA devices...")
+		return a, a.loadUserMFA(msg.UserName)
+
+	// EC2 Instance actions
+	case *handlers.StartInstanceAction:
+		a.footer.SetLoading(true, "Starting instance...")
+		return a, a.startEC2Instance(msg.InstanceID)
+
+	case *handlers.StopInstanceAction:
+		a.footer.SetLoading(true, "Stopping instance...")
+		return a, a.stopEC2Instance(msg.InstanceID)
+
+	case *handlers.RebootInstanceAction:
+		a.footer.SetLoading(true, "Rebooting instance...")
+		return a, a.rebootEC2Instance(msg.InstanceID)
+
+	case *handlers.ViewConnectionInfoAction:
+		a.footer.SetLoading(true, "Loading connection info...")
+		return a, a.loadConnectionInfo(msg.InstanceID)
+
+	// S3 Bucket actions
+	case *handlers.ViewBucketPolicyAction:
+		a.footer.SetLoading(true, "Loading bucket policy...")
+		return a, a.loadBucketPolicy(msg.BucketName)
+
 	case *handlers.ExecRequestAction:
 		// For now, auto-select first container (can add picker later)
 		containerName := msg.Containers[0].Name
@@ -598,6 +646,30 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case SecretDeleteErrorMsg:
 		a.footer.SetMessage(fmt.Sprintf("Failed to delete secret: %v", msg.err), true)
+		a.footer.SetLoading(false, "")
+		return a, nil
+
+	// IAM User data messages
+	case UserDataLoadedMsg:
+		a.footer.SetLoading(false, "")
+		a.infoDialog.SetSize(a.width, a.height)
+		a.infoDialog.Show(msg.title, msg.data)
+		return a, nil
+
+	case UserDataErrorMsg:
+		a.footer.SetMessage(fmt.Sprintf("Failed to load data: %v", msg.err), true)
+		a.footer.SetLoading(false, "")
+		return a, nil
+
+	// EC2 Instance operation messages
+	case EC2InstanceOperationSuccessMsg:
+		a.footer.SetMessage(msg.message, false)
+		a.footer.SetLoading(false, "")
+		// Refresh the list to show updated state
+		return a, a.resourceList.Refresh()
+
+	case EC2InstanceOperationErrorMsg:
+		a.footer.SetMessage(fmt.Sprintf("Operation failed: %v", msg.err), true)
 		a.footer.SetLoading(false, "")
 		return a, nil
 	}
@@ -1088,6 +1160,11 @@ func (a *App) View() string {
 		footer,
 	)
 
+	// Overlay info dialog if visible
+	if a.infoDialog.IsVisible() {
+		view = a.infoDialog.View()
+	}
+
 	// Overlay selector if active
 	if a.selector.IsActive() {
 		view = a.selector.View()
@@ -1251,6 +1328,25 @@ type SecretDeletedMsg struct {
 }
 
 type SecretDeleteErrorMsg struct {
+	err error
+}
+
+// IAM User data messages
+type UserDataLoadedMsg struct {
+	title string
+	data  interface{}
+}
+
+type UserDataErrorMsg struct {
+	err error
+}
+
+// EC2 Instance operation messages
+type EC2InstanceOperationSuccessMsg struct {
+	message string
+}
+
+type EC2InstanceOperationErrorMsg struct {
 	err error
 }
 
@@ -1483,5 +1579,233 @@ func (a *App) deleteSecret(secretID, secretName string, recoveryWindowDays int) 
 		}
 
 		return SecretDeletedMsg{secretID: secretID}
+	}
+}
+
+// IAM User data loading functions
+
+func (a *App) loadUserPolicies(userName string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		handler, ok := a.registry.Get("users")
+		if !ok {
+			return UserDataErrorMsg{err: fmt.Errorf("users handler not found")}
+		}
+
+		usersHandler, ok := handler.(*handlers.IAMUsersHandler)
+		if !ok {
+			return UserDataErrorMsg{err: fmt.Errorf("invalid handler type")}
+		}
+
+		data, err := usersHandler.GetUserPolicies(ctx, userName)
+		if err != nil {
+			return UserDataErrorMsg{err: err}
+		}
+
+		return UserDataLoadedMsg{
+			title: fmt.Sprintf("Policies for User: %s", userName),
+			data:  data,
+		}
+	}
+}
+
+func (a *App) loadUserGroups(userName string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		handler, ok := a.registry.Get("users")
+		if !ok {
+			return UserDataErrorMsg{err: fmt.Errorf("users handler not found")}
+		}
+
+		usersHandler, ok := handler.(*handlers.IAMUsersHandler)
+		if !ok {
+			return UserDataErrorMsg{err: fmt.Errorf("invalid handler type")}
+		}
+
+		data, err := usersHandler.GetUserGroups(ctx, userName)
+		if err != nil {
+			return UserDataErrorMsg{err: err}
+		}
+
+		return UserDataLoadedMsg{
+			title: fmt.Sprintf("Groups for User: %s", userName),
+			data:  data,
+		}
+	}
+}
+
+func (a *App) loadUserAccessKeys(userName string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		handler, ok := a.registry.Get("users")
+		if !ok {
+			return UserDataErrorMsg{err: fmt.Errorf("users handler not found")}
+		}
+
+		usersHandler, ok := handler.(*handlers.IAMUsersHandler)
+		if !ok {
+			return UserDataErrorMsg{err: fmt.Errorf("invalid handler type")}
+		}
+
+		data, err := usersHandler.GetUserAccessKeys(ctx, userName)
+		if err != nil {
+			return UserDataErrorMsg{err: err}
+		}
+
+		return UserDataLoadedMsg{
+			title: fmt.Sprintf("Access Keys for User: %s", userName),
+			data:  data,
+		}
+	}
+}
+
+func (a *App) loadUserMFA(userName string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		handler, ok := a.registry.Get("users")
+		if !ok {
+			return UserDataErrorMsg{err: fmt.Errorf("users handler not found")}
+		}
+
+		usersHandler, ok := handler.(*handlers.IAMUsersHandler)
+		if !ok {
+			return UserDataErrorMsg{err: fmt.Errorf("invalid handler type")}
+		}
+
+		data, err := usersHandler.GetUserMFADevices(ctx, userName)
+		if err != nil {
+			return UserDataErrorMsg{err: err}
+		}
+
+		return UserDataLoadedMsg{
+			title: fmt.Sprintf("MFA Devices for User: %s", userName),
+			data:  data,
+		}
+	}
+}
+
+// EC2 Instance operation functions
+
+func (a *App) startEC2Instance(instanceID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		handler, ok := a.registry.Get("ec2")
+		if !ok {
+			return EC2InstanceOperationErrorMsg{err: fmt.Errorf("EC2 handler not found")}
+		}
+
+		ec2Handler, ok := handler.(*handlers.EC2InstancesHandler)
+		if !ok {
+			return EC2InstanceOperationErrorMsg{err: fmt.Errorf("invalid handler type")}
+		}
+
+		err := ec2Handler.StartInstance(ctx, instanceID)
+		if err != nil {
+			return EC2InstanceOperationErrorMsg{err: err}
+		}
+
+		return EC2InstanceOperationSuccessMsg{
+			message: fmt.Sprintf("Instance %s is starting", instanceID),
+		}
+	}
+}
+
+func (a *App) stopEC2Instance(instanceID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		handler, ok := a.registry.Get("ec2")
+		if !ok {
+			return EC2InstanceOperationErrorMsg{err: fmt.Errorf("EC2 handler not found")}
+		}
+
+		ec2Handler, ok := handler.(*handlers.EC2InstancesHandler)
+		if !ok {
+			return EC2InstanceOperationErrorMsg{err: fmt.Errorf("invalid handler type")}
+		}
+
+		err := ec2Handler.StopInstance(ctx, instanceID)
+		if err != nil {
+			return EC2InstanceOperationErrorMsg{err: err}
+		}
+
+		return EC2InstanceOperationSuccessMsg{
+			message: fmt.Sprintf("Instance %s is stopping", instanceID),
+		}
+	}
+}
+
+func (a *App) rebootEC2Instance(instanceID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		handler, ok := a.registry.Get("ec2")
+		if !ok {
+			return EC2InstanceOperationErrorMsg{err: fmt.Errorf("EC2 handler not found")}
+		}
+
+		ec2Handler, ok := handler.(*handlers.EC2InstancesHandler)
+		if !ok {
+			return EC2InstanceOperationErrorMsg{err: fmt.Errorf("invalid handler type")}
+		}
+
+		err := ec2Handler.RebootInstance(ctx, instanceID)
+		if err != nil {
+			return EC2InstanceOperationErrorMsg{err: err}
+		}
+
+		return EC2InstanceOperationSuccessMsg{
+			message: fmt.Sprintf("Instance %s is rebooting", instanceID),
+		}
+	}
+}
+
+func (a *App) loadConnectionInfo(instanceID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		handler, ok := a.registry.Get("ec2")
+		if !ok {
+			return UserDataErrorMsg{err: fmt.Errorf("EC2 handler not found")}
+		}
+
+		ec2Handler, ok := handler.(*handlers.EC2InstancesHandler)
+		if !ok {
+			return UserDataErrorMsg{err: fmt.Errorf("invalid handler type")}
+		}
+
+		data, err := ec2Handler.GetConnectionInfo(ctx, instanceID)
+		if err != nil {
+			return UserDataErrorMsg{err: err}
+		}
+
+		return UserDataLoadedMsg{
+			title: fmt.Sprintf("Connection Info for Instance: %s", instanceID),
+			data:  data,
+		}
+	}
+}
+
+// S3 Bucket operation functions
+
+func (a *App) loadBucketPolicy(bucketName string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		handler, ok := a.registry.Get("s3")
+		if !ok {
+			return UserDataErrorMsg{err: fmt.Errorf("S3 handler not found")}
+		}
+
+		s3Handler, ok := handler.(*handlers.S3BucketsHandler)
+		if !ok {
+			return UserDataErrorMsg{err: fmt.Errorf("invalid handler type")}
+		}
+
+		data, err := s3Handler.GetBucketPolicyForView(ctx, bucketName)
+		if err != nil {
+			return UserDataErrorMsg{err: err}
+		}
+
+		return UserDataLoadedMsg{
+			title: fmt.Sprintf("Bucket Policy for: %s", bucketName),
+			data:  data,
+		}
 	}
 }

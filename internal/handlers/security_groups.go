@@ -170,8 +170,7 @@ func formatRule(rule ec2adapter.SecurityGroupRule) map[string]interface{} {
 
 func (h *SecurityGroupsHandler) Actions() []Action {
 	return []Action{
-		{Key: "i", Name: "inbound", Description: "View inbound rules"},
-		{Key: "o", Name: "outbound", Description: "View outbound rules"},
+		// No custom actions - inbound/outbound rules are shown in describe view
 	}
 }
 

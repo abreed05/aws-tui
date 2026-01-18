@@ -149,10 +149,52 @@ func (h *S3BucketsHandler) Describe(ctx context.Context, id string) (map[string]
 
 func (h *S3BucketsHandler) Actions() []Action {
 	return []Action{
-		{Key: "o", Name: "objects", Description: "Browse objects"},
 		{Key: "p", Name: "policy", Description: "View bucket policy"},
 	}
 }
+
+func (h *S3BucketsHandler) ExecuteAction(ctx context.Context, action string, resourceID string) error {
+	switch action {
+	case "policy":
+		return &ViewBucketPolicyAction{
+			BucketName: resourceID,
+		}
+	default:
+		return ErrNotSupported
+	}
+}
+
+// GetBucketPolicyForView retrieves bucket policy for viewing
+func (h *S3BucketsHandler) GetBucketPolicyForView(ctx context.Context, bucketName string) (interface{}, error) {
+	policy, err := h.client.GetBucketPolicy(ctx, bucketName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get bucket policy: %w", err)
+	}
+
+	if policy == "" {
+		return map[string]string{"message": "No bucket policy configured"}, nil
+	}
+
+	// Parse JSON policy
+	var policyDoc map[string]interface{}
+	if err := json.Unmarshal([]byte(policy), &policyDoc); err != nil {
+		// Return as string if not valid JSON
+		return map[string]string{"policy": policy}, nil
+	}
+
+	return policyDoc, nil
+}
+
+// ViewBucketPolicyAction triggers viewing bucket policy
+type ViewBucketPolicyAction struct {
+	BucketName string
+}
+
+func (a *ViewBucketPolicyAction) Error() string {
+	return fmt.Sprintf("view policy for bucket %s", a.BucketName)
+}
+
+func (a *ViewBucketPolicyAction) IsActionMsg() {}
 
 // S3BucketResource implements Resource interface for S3 buckets
 type S3BucketResource struct {

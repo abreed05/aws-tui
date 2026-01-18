@@ -148,6 +148,97 @@ func (h *EC2InstancesHandler) Actions() []Action {
 	}
 }
 
+func (h *EC2InstancesHandler) ExecuteAction(ctx context.Context, action string, resourceID string) error {
+	switch action {
+	case "start":
+		return &StartInstanceAction{
+			InstanceID: resourceID,
+		}
+	case "stop":
+		return &StopInstanceAction{
+			InstanceID: resourceID,
+		}
+	case "reboot":
+		return &RebootInstanceAction{
+			InstanceID: resourceID,
+		}
+	case "connect":
+		return &ViewConnectionInfoAction{
+			InstanceID: resourceID,
+		}
+	default:
+		return ErrNotSupported
+	}
+}
+
+// Helper methods for EC2 operations
+
+// StartInstance starts an EC2 instance
+func (h *EC2InstancesHandler) StartInstance(ctx context.Context, instanceID string) error {
+	return h.client.StartInstance(ctx, instanceID)
+}
+
+// StopInstance stops an EC2 instance
+func (h *EC2InstancesHandler) StopInstance(ctx context.Context, instanceID string) error {
+	return h.client.StopInstance(ctx, instanceID)
+}
+
+// RebootInstance reboots an EC2 instance
+func (h *EC2InstancesHandler) RebootInstance(ctx context.Context, instanceID string) error {
+	return h.client.RebootInstance(ctx, instanceID)
+}
+
+// GetConnectionInfo retrieves connection information for an instance
+func (h *EC2InstancesHandler) GetConnectionInfo(ctx context.Context, instanceID string) (map[string]interface{}, error) {
+	return h.client.GetInstanceConnectionInfo(ctx, instanceID)
+}
+
+// Action message types for EC2 instances
+
+// StartInstanceAction triggers starting an instance
+type StartInstanceAction struct {
+	InstanceID string
+}
+
+func (a *StartInstanceAction) Error() string {
+	return fmt.Sprintf("start instance %s", a.InstanceID)
+}
+
+func (a *StartInstanceAction) IsActionMsg() {}
+
+// StopInstanceAction triggers stopping an instance
+type StopInstanceAction struct {
+	InstanceID string
+}
+
+func (a *StopInstanceAction) Error() string {
+	return fmt.Sprintf("stop instance %s", a.InstanceID)
+}
+
+func (a *StopInstanceAction) IsActionMsg() {}
+
+// RebootInstanceAction triggers rebooting an instance
+type RebootInstanceAction struct {
+	InstanceID string
+}
+
+func (a *RebootInstanceAction) Error() string {
+	return fmt.Sprintf("reboot instance %s", a.InstanceID)
+}
+
+func (a *RebootInstanceAction) IsActionMsg() {}
+
+// ViewConnectionInfoAction triggers viewing connection info
+type ViewConnectionInfoAction struct {
+	InstanceID string
+}
+
+func (a *ViewConnectionInfoAction) Error() string {
+	return fmt.Sprintf("view connection info for instance %s", a.InstanceID)
+}
+
+func (a *ViewConnectionInfoAction) IsActionMsg() {}
+
 // EC2InstanceResource implements Resource interface for EC2 instances
 type EC2InstanceResource struct {
 	instance ec2adapter.Instance
